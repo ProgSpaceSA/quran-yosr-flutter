@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter emulators:*)",
+      "Bash(flutter devices:*)",
+      "Bash(flutter run:*)",
+      "Bash(adb:*)",
+      "Bash(unzip:*)",
+      "Bash(head:*)",
+      "Bash(flutter pub get:*)",
+      "Bash(mysql:*)",
+      "Bash(\"/c/Program Files/MySQL/MySQL Server 8.0/bin/mysql.exe\" -u root --password=\"\" -e \"SELECT 1;\")",
+      "Bash(\"/c/Program Files/MySQL/MySQL Server 8.0/bin/mysql.exe\" -u root --password=\"root\" quran -e \"SELECT COUNT\\(*\\) AS total_ayahs, MIN\\(sura_no\\) AS first_sura, MAX\\(sura_no\\) AS last_sura FROM quran_ayahs;\")",
+      "Bash(python:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(/c/ClauseProjects/QuranER/android/app/src/main/kotlin/com/quraner/yosr/MainActivity.kt:*)",
+      "Bash(where:*)",
+      "Bash(node -e:*)",
+      "Bash(dart:*)",
+      "Bash(pip install:*)",
+      "Bash(node --version:*)",
+      "Bash(npm --version:*)",
+      "Bash(node convert_icon.js:*)",
+      "Bash(flutter pub run:*)",
+      "Bash(flutter build:*)",
+      "Bash(taskkill:*)",
+      "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" kill-server)",
+      "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" start-server)",
+      "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" devices)",
+      "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" -s emulator-5554 shell df /data)"
+    ]
+  }
+}
