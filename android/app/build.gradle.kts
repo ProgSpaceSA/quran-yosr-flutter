@@ -15,7 +15,7 @@ if (keyPropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.quraner.yosr"
+    namespace = "com.quranyosr.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
@@ -38,7 +38,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.quraner.yosr"
+        applicationId = "com.quranyosr.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
