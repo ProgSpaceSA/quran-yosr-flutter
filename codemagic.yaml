@@ -30,7 +30,7 @@ workflows:
         script: |
           flutter build ipa --release \
             --build-name=1.0.0 \
-            --build-number=$BUILD_NUMBER
+            --build-number=$((BUILD_NUMBER + 1))
 
     artifacts:
       - build/ios/ipa/*.ipa
