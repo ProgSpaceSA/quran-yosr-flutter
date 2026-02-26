@@ -44,6 +44,11 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Release signing — never commit these
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+
 
 # See https://www.dartlang.org/guides/libraries/private-files
 
