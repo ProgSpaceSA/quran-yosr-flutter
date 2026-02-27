@@ -819,7 +819,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
             // Pin the highlight item — ensureVisible if built, rough jump if not.
             final ctx = _highlightKey?.currentContext;
             if (ctx != null) {
-              Scrollable.ensureVisible(ctx, alignment: 0.0, duration: Duration.zero);
+              Scrollable.ensureVisible(ctx, alignment: 0.25, duration: Duration.zero);
             } else if (_scrollController.hasClients && _highlightId != null) {
               final idx = _ayahs.indexWhere((a) => a.id == _highlightId);
               if (idx >= 0 && _ayahs.length > 1) {
@@ -861,7 +861,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                 if (_userDragging) return;
                 final postCtx = hlKeyNow?.currentContext;
                 if (postCtx == null) return; // scrolled off screen
-                Scrollable.ensureVisible(postCtx, alignment: 0.0, duration: Duration.zero);
+                Scrollable.ensureVisible(postCtx, alignment: 0.25, duration: Duration.zero);
                 debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
               });
             } else {
@@ -1052,8 +1052,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
     final isDark = widget.isDark;
     final textColor = isDark ? const Color(0xFFE8D5B0) : Colors.black;
     final headerBg = isDark
-        ? Colors.white.withValues(alpha: 0.07)
-        : Colors.black.withValues(alpha: 0.04);
+        ? Colors.white.withOpacity(0.07)
+        : Colors.black.withOpacity(0.04);
     final dividerColor = isDark ? Colors.white24 : Colors.black12;
     final headerTextColor = isDark ? Colors.white70 : Colors.black87;
 
@@ -1161,12 +1161,15 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
         ),
       ),
       bottomNavigationBar: Container(
-        height: 56,
         decoration: BoxDecoration(
           color: isDark ? _bgDark : _bgLight,
           border: Border(top: BorderSide(color: dividerColor, width: 1)),
         ),
-        child: Row(
+        child: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: 56,
+            child: Row(
           children: [
             const SizedBox(width: 4),
             // Play / Pause
@@ -1209,6 +1212,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
             ),
             const SizedBox(width: 8),
           ],
+        ),
+          ),
         ),
       ),
       body: Stack(
@@ -1255,7 +1260,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
               // Larger cache ensures more back-buffer items are measured before
               // correctBy fires, giving it a more accurate delta to work with.
               cacheExtent: 1500,
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
               itemCount: _items.length,
               itemBuilder: (context, index) {
                 final item = _items[index];
@@ -1399,7 +1404,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
           if (_navigating)
             Positioned.fill(
               child: Container(
-                color: Colors.black.withValues(alpha: 0.55),
+                color: Colors.black.withOpacity(0.55),
                 child: const Center(child: CircularProgressIndicator()),
               ),
             ),
@@ -1415,7 +1420,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                   // constrained to the full overlay height (which caused overflow
                   // when the keyboard was shown).
                   child: Container(
-                    color: Colors.black.withValues(alpha: 0.55),
+                    color: Colors.black.withOpacity(0.55),
                     child: SafeArea(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
@@ -1745,7 +1750,7 @@ class _NavSheetState extends State<_NavSheet> {
                       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
                       decoration: BoxDecoration(
                         color: selected
-                            ? (isDark ? Colors.white.withValues(alpha: 0.15) : Colors.black87)
+                            ? (isDark ? Colors.white.withOpacity(0.15) : Colors.black87)
                             : Colors.transparent,
                         border: Border.all(color: borderColor),
                         borderRadius: BorderRadius.circular(20),

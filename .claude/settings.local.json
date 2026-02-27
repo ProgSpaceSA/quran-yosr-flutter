@@ -28,7 +28,15 @@
       "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" start-server)",
       "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" devices)",
       "Bash(\"/c/Users/Ali/AppData/Local/Android/Sdk/platform-tools/adb\" -s emulator-5554 shell df /data)",
-      "Bash(keytool -genkey -v -keystore \"c:/ClauseProjects/QuranER/android/app/quran-yosr-release.jks\" -keyalg RSA -keysize 2048 -validity 10000 -alias quran-yosr -storepass \"QuranYosr2024!\" -keypass \"QuranYosr2024!\" -dname \"CN=QuranYosr, OU=Mobile, O=QuranYosr, L=Unknown, ST=Unknown, C=SA\")"
+      "Bash(keytool -genkey -v -keystore \"c:/ClauseProjects/QuranER/android/app/quran-yosr-release.jks\" -keyalg RSA -keysize 2048 -validity 10000 -alias quran-yosr -storepass \"QuranYosr2024!\" -keypass \"QuranYosr2024!\" -dname \"CN=QuranYosr, OU=Mobile, O=QuranYosr, L=Unknown, ST=Unknown, C=SA\")",
+      "Bash(flutter upgrade)",
+      "Bash(flutter --version)",
+      "Bash(pkill -f \"flutter run\")",
+      "Bash(pod install)",
+      "Bash(xcodebuild -version)",
+      "Bash(git add pubspec.yaml codemagic.yaml)",
+      "Bash(git commit -m \"Bump build number to 2\")",
+      "Bash(git push)"
     ]
   }
 }

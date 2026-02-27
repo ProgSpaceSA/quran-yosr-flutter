@@ -1,0 +1,49 @@
+workflows:
+  ios-release:
+    name: iOS Release — App Store
+    max_build_duration: 60
+    instance_type: mac_mini_m2  # macOS 14, Xcode 16
+
+    environment:
+      xcode: 16.2
+      flutter: 3.24.3
+      groups:
+        - app_store_connect   # Added in Codemagic UI (see setup steps below)
+        - signing_credentials # Added in Codemagic UI (see setup steps below)
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.quranyosr.app
+
+    scripts:
+      - name: Set LANG for CocoaPods
+        script: export LANG=en_US.UTF-8
+
+      - name: Get Flutter packages
+        script: flutter pub get
+
+      - name: Install pods
+        script: |
+          cd ios
+          LANG=en_US.UTF-8 pod install
+
+      - name: Build IPA
+        script: |
+          flutter build ipa --release \
+            --build-name=1.0.0 \
+            --build-number=$((BUILD_NUMBER + 1))
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log   # Build logs (useful if build fails)
+
+    publishing:
+      app_store_connect:
+        auth: integration            # Uses credentials from Codemagic UI
+        submit_to_testflight: true   # Set to false to skip TestFlight
+        submit_to_app_store: false   # Set to true for direct App Store submission
+      email:
+        recipients:
+          - your@email.com           # Replace with your email
+        notify:
+          success: true
+          failure: true
