@@ -18,7 +18,7 @@ void main() => runApp(const MyApp());
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 const _bgLight = Color(0xFFFFFFFF);
-const _bgDark  = Color(0xFF1C1C1E);
+const _bgDark = Color(0xFF1C1C1E);
 
 ThemeData _buildTheme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
@@ -231,7 +231,8 @@ class AyahsPage extends StatefulWidget {
   State<AyahsPage> createState() => _AyahsPageState();
 }
 
-class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMixin {
+class _AyahsPageState extends State<AyahsPage>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final List<Ayah> _ayahs = [];
   List<_Item> _items = [];
   final ScrollController _scrollController = ScrollController();
@@ -256,8 +257,10 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
   bool _searching = false;
 
   bool _autoScrolling = false;
-  bool _userDragging  = false; // true while finger is actively dragging
-  bool _isPinching    = false; // true during 2-finger pinch-to-zoom
+  bool _userDragging = false; // true while finger is actively dragging
+  bool _isPinching = false; // true during 2-finger pinch-to-zoom
+  int _pointerCount = 0; // live touch-point count (for instant pinch detection)
+  bool _showTutorial = false; // true on first launch
   int _speedLevel = 1; // 0 = slowest … 6 = fastest
   Ticker? _autoScrollTicker;
   Duration _lastTickElapsed = Duration.zero;
@@ -265,9 +268,10 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
   static const _kSpeedPxPerMs = [0.007, 0.018, 0.045, 0.10, 0.19, 0.34, 0.60];
 
   static const _kPrefMinId = 'last_min_id';
-  int _lastKnownSaveId = 0; // cached so dispose() can write without a scroll controller
+  int _lastKnownSaveId =
+      0; // cached so dispose() can write without a scroll controller
   bool _justNavigated = false; // blocks auto _loadPrev right after navigation
-  bool _navigating  = false;  // overlay shown during navigate + back-buffer load
+  bool _navigating = false; // overlay shown during navigate + back-buffer load
   DateTime _prevCooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   // Diagnostic 100ms sampler — runs forever; helps trace the scroll-jump bug.
@@ -275,7 +279,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
 
   // Title-bar state — updated on every visible-ayah change.
   String _currentSuraName = '';
-  int    _currentJuz      = 0;
+  int _currentJuz = 0;
 
   // Singleton highlight — the ayah id navigated to from search.  null = no highlight.
   // When true, _highlightId was set by a user tap (not navigation).
@@ -284,7 +288,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
 
   // _highlightKey is attached to the highlighted widget so ensureVisible can
   // precisely scroll to it after correctBy gives the approximate position.
-  int?      _highlightId;
+  int? _highlightId;
   GlobalKey? _highlightKey;
 
   // Basmala text (surah 1 aya 1) — used as the standalone centred line after
@@ -294,9 +298,36 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
   // Map Quran page → juz number (standard Hafs mushaf boundaries).
   static int _pageToJuz(int page) {
     const starts = [
-      1, 22, 42, 62, 82, 102, 121, 142, 162, 182,
-      201, 221, 242, 262, 282, 302, 322, 342, 362, 382,
-      402, 422, 442, 462, 482, 502, 522, 542, 562, 582,
+      1,
+      22,
+      42,
+      62,
+      82,
+      102,
+      121,
+      142,
+      162,
+      182,
+      201,
+      221,
+      242,
+      262,
+      282,
+      302,
+      322,
+      342,
+      362,
+      382,
+      402,
+      422,
+      442,
+      462,
+      482,
+      502,
+      522,
+      542,
+      562,
+      582,
     ];
     for (int i = starts.length - 1; i >= 0; i--) {
       if (page >= starts[i]) return i + 1;
@@ -348,6 +379,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     debugPrint('[Init] initState — starting app');
     WakelockPlus.enable();
     _loadInitial();
@@ -363,14 +395,15 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       if (!mounted || !_scrollController.hasClients) return;
       final pos = _scrollController.position;
       if (_ayahs.isEmpty || pos.maxScrollExtent <= 0) return;
-      final px   = pos.pixels;
-      final mx   = pos.maxScrollExtent;
+      final px = pos.pixels;
+      final mx = pos.maxScrollExtent;
       final frac = (px / mx).clamp(0.0, 1.0);
-      final idx  = (frac * (_ayahs.length - 1)).round();
-      final mid  = _ayahs[idx];
+      final idx = (frac * (_ayahs.length - 1)).round();
+      final mid = _ayahs[idx];
       // Detect unexpected max changes (not from a correctBy we just fired).
       if (prevMax > 0 && (mx - prevMax).abs() > 5) {
-        debugPrint('[100ms-JUMP] max changed ${prevMax.toStringAsFixed(0)}→${mx.toStringAsFixed(0)} '
+        debugPrint(
+            '[100ms-JUMP] max changed ${prevMax.toStringAsFixed(0)}→${mx.toStringAsFixed(0)} '
             '(+${(mx - prevMax).toStringAsFixed(0)}) px=${px.toStringAsFixed(0)} '
             'lp=$_loadingPrev lm=$_loadingMore nav=$_navigating');
       }
@@ -383,7 +416,16 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      if (_autoScrolling) _stopAutoScroll();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     debugPrint('[Dispose] dispose — saving lastKnownSaveId=$_lastKnownSaveId');
     WakelockPlus.disable();
     _diagTimer?.cancel();
@@ -410,7 +452,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
     // in the tree — the ayah is off screen.
     if (_tapHighlight && _highlightKey?.currentContext == null) {
       setState(() {
-        _highlightId  = null;
+        _highlightId = null;
         _highlightKey = null;
         _tapHighlight = false;
       });
@@ -421,8 +463,10 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
     // Track position — but only while the list is stable.
     // During prepend/append and scroll corrections the fraction-based index
     // drifts (list length changes), so saving it would persist a wrong position.
-    if (!_loadingPrev && !_loadingMore &&
-        _ayahs.isNotEmpty && pos.maxScrollExtent > 0) {
+    if (!_loadingPrev &&
+        !_loadingMore &&
+        _ayahs.isNotEmpty &&
+        pos.maxScrollExtent > 0) {
       final fraction = (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0);
       final idx = (fraction * (_ayahs.length - 1)).round();
       final ayah = _ayahs[idx];
@@ -440,13 +484,15 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
         if (ayah.suraNameAr != _currentSuraName || juz != _currentJuz) {
           setState(() {
             _currentSuraName = ayah.suraNameAr;
-            _currentJuz      = juz;
+            _currentJuz = juz;
           });
         }
       }
     }
 
-    if (!_loadingMore && !_reachedBottom && pos.pixels >= pos.maxScrollExtent - 400) {
+    if (!_loadingMore &&
+        !_reachedBottom &&
+        pos.pixels >= pos.maxScrollExtent - 400) {
       debugPrint('[Scroll] Near bottom → _loadMore');
       _loadMore();
     }
@@ -467,7 +513,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
     }
   }
 
-  Future<List<Ayah>> _fetch(String where, List<Object> args, String order) async {
+  Future<List<Ayah>> _fetch(
+      String where, List<Object> args, String order) async {
     final db = await _openDb();
     final rows = await db.rawQuery(
       'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text '
@@ -508,16 +555,22 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
         // not carry a verse number.  We strip rune-by-rune from the end so the
         // encoding used by HafsSmart doesn't matter.
         final raw = _colToString(basmalaRows.first['aya_text']);
-        debugPrint('[Init] Basmala raw last-cp=0x${raw.runes.last.toRadixString(16)} len=${raw.length}');
+        debugPrint(
+            '[Init] Basmala raw last-cp=0x${raw.runes.last.toRadixString(16)} len=${raw.length}');
         final runes = raw.runes.toList();
         while (runes.isNotEmpty) {
           final cp = runes.last;
-          if ((cp >= 0x30   && cp <= 0x39)   || // ASCII 0-9
+          if ((cp >= 0x30 && cp <= 0x39) || // ASCII 0-9
               (cp >= 0x0660 && cp <= 0x0669) || // Arabic-Indic ٠-٩
               (cp >= 0x06F0 && cp <= 0x06F9) || // Extended Arabic-Indic ۰-۹
-              (cp >= 0xE000 && cp <= 0xF8FF) || // Private Use Area (HafsSmart glyphs)
-              cp == 0x06DD || cp == 0xFD3E || cp == 0xFD3F || // ۝ ﴿ ﴾
-              cp == 0x20   || cp == 0x00A0) {   // space / NBSP
+              (cp >= 0xE000 &&
+                  cp <= 0xF8FF) || // Private Use Area (HafsSmart glyphs)
+              cp == 0x06DD ||
+              cp == 0xFD3E ||
+              cp == 0xFD3F || // ۝ ﴿ ﴾
+              cp == 0x20 ||
+              cp == 0x00A0) {
+            // space / NBSP
             runes.removeLast();
           } else {
             break;
@@ -528,8 +581,9 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
             'last-cp=0x${_basmalaText.runes.last.toRadixString(16)}');
       }
       final savedPage = pageRows.isNotEmpty ? pageRows.first['page'] as int : 1;
-      final toPage   = (savedPage + 2).clamp(1, 604);
-      debugPrint('[Init] savedPage=$savedPage → loading pages $savedPage–$toPage');
+      final toPage = (savedPage + 2).clamp(1, 604);
+      debugPrint(
+          '[Init] savedPage=$savedPage → loading pages $savedPage–$toPage');
 
       // Phase 1: load from savedPage forward — user sees their position at top.
       final rows = await db.rawQuery(
@@ -557,24 +611,24 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       // show the nav overlay, pin the saved ayah, and only dismiss once the
       // layout has fully stabilised.  This prevents the startup shift caused
       // by correctBy's inaccurate estimated-height delta.
-      final target = ayahs.firstWhere(
-        (a) => a.id >= savedId, orElse: () => ayahs.first);
+      final target =
+          ayahs.firstWhere((a) => a.id >= savedId, orElse: () => ayahs.first);
       setState(() {
         _ayahs.addAll(ayahs);
         _recomputeItems();
         _minId = ayahs.first.id;
         _maxId = ayahs.last.id;
-        _reachedTop    = savedPage == 1;
-        _reachedBottom = toPage  >= 604;
+        _reachedTop = savedPage == 1;
+        _reachedBottom = toPage >= 604;
         _initialLoading = false;
         // Initialise title bar from the saved ayah.
         _currentSuraName = target.suraNameAr;
-        _currentJuz      = _pageToJuz(target.page);
+        _currentJuz = _pageToJuz(target.page);
         // Reuse the navigation overlay + stability-pinFrame path.
-        _highlightId  = savedId;
+        _highlightId = savedId;
         _highlightKey = GlobalKey();
         _tapHighlight = false;
-        _navigating   = true; // overlay shown; _onScroll blocked entirely
+        _navigating = true; // overlay shown; _onScroll blocked entirely
         _justNavigated = true;
       });
       debugPrint('[Init] Done: _minId=$_minId _maxId=$_maxId '
@@ -584,7 +638,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollController.hasClients) _scrollController.jumpTo(0);
         if (savedPage > 1 && mounted && !_loadingPrev) {
-          debugPrint('[Init] Pre-loading back-buffer and pinning saved ayah...');
+          debugPrint(
+              '[Init] Pre-loading back-buffer and pinning saved ayah...');
           _loadPrevAndDismiss(); // correctBy + stability-pinFrame → dismisses overlay
         } else {
           // Already at the top of the Quran — no back-buffer needed.
@@ -600,6 +655,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
         _initialLoading = false;
       });
     }
+    _checkTutorial();
   }
 
   Future<void> _loadMore() async {
@@ -631,7 +687,10 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
           (await _fetch('id < ?', [_minId], 'id DESC')).reversed.toList();
       if (ayahs.isEmpty) {
         debugPrint('[LoadPrev] Reached top of Quran');
-        setState(() { _reachedTop = true; _loadingPrev = false; });
+        setState(() {
+          _reachedTop = true;
+          _loadingPrev = false;
+        });
         return;
       }
       debugPrint('[LoadPrev] Got ${ayahs.length} ayahs '
@@ -648,16 +707,18 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollController.hasClients) {
-          final pos    = _scrollController.position;
+          final pos = _scrollController.position;
           final newMax = pos.maxScrollExtent;
-          final delta  = newMax - oldMax;
-          debugPrint('[LoadPrev-correctBy] BEFORE px=${pos.pixels.toStringAsFixed(0)} '
+          final delta = newMax - oldMax;
+          debugPrint(
+              '[LoadPrev-correctBy] BEFORE px=${pos.pixels.toStringAsFixed(0)} '
               'oldMax=${oldMax.toStringAsFixed(0)} '
               'newMax=${newMax.toStringAsFixed(0)} '
               'delta=${delta.toStringAsFixed(0)}');
           if (delta > 0) {
             pos.correctBy(delta);
-            debugPrint('[LoadPrev-correctBy] AFTER  px=${pos.pixels.toStringAsFixed(0)} '
+            debugPrint(
+                '[LoadPrev-correctBy] AFTER  px=${pos.pixels.toStringAsFixed(0)} '
                 'max=${pos.maxScrollExtent.toStringAsFixed(0)}');
           }
         }
@@ -693,10 +754,12 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
         'SELECT page FROM quran_ayahs WHERE id >= ? ORDER BY id LIMIT 1',
         [startId],
       );
-      final targetPage = pageRows.isNotEmpty ? pageRows.first['page'] as int : 1;
+      final targetPage =
+          pageRows.isNotEmpty ? pageRows.first['page'] as int : 1;
       final fromPage = targetPage;
-      final toPage   = (targetPage + 2).clamp(1, 604);
-      debugPrint('[Navigate] targetPage=$targetPage → loading pages $fromPage–$toPage');
+      final toPage = (targetPage + 2).clamp(1, 604);
+      debugPrint(
+          '[Navigate] targetPage=$targetPage → loading pages $fromPage–$toPage');
 
       final rows = await db.rawQuery(
         'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text '
@@ -705,14 +768,16 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       );
       await db.close();
 
-      final ayahs = rows.map((r) => Ayah(
-        id: r['id'] as int,
-        suraNo: r['sura_no'] as int,
-        ayaNo: r['aya_no'] as int,
-        page: r['page'] as int,
-        suraNameAr: r['sura_name_ar'] as String,
-        ayaText: _colToString(r['aya_text']),
-      )).toList();
+      final ayahs = rows
+          .map((r) => Ayah(
+                id: r['id'] as int,
+                suraNo: r['sura_no'] as int,
+                ayaNo: r['aya_no'] as int,
+                page: r['page'] as int,
+                suraNameAr: r['sura_name_ar'] as String,
+                ayaText: _colToString(r['aya_text']),
+              ))
+          .toList();
 
       final targetIdx = ayahs.indexWhere((a) => a.id >= startId);
       debugPrint('[Navigate] Loaded ${ayahs.length} ayahs'
@@ -728,15 +793,15 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
           _maxId = ayahs.last.id;
           _reachedTop = fromPage == 1;
           // Update title bar to the target ayah.
-          final target = ayahs.firstWhere(
-            (a) => a.id >= startId, orElse: () => ayahs.first);
+          final target = ayahs.firstWhere((a) => a.id >= startId,
+              orElse: () => ayahs.first);
           _currentSuraName = target.suraNameAr;
-          _currentJuz      = _pageToJuz(target.page);
+          _currentJuz = _pageToJuz(target.page);
         }
         _reachedBottom = toPage >= 604;
         // Set singleton highlight to the navigated ayah.
         // Fresh key each navigation so ensureVisible finds the right widget.
-        _highlightId  = startId;
+        _highlightId = startId;
         _highlightKey = GlobalKey();
         _tapHighlight = false;
       });
@@ -753,7 +818,10 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
         }
       });
     } catch (e) {
-      setState(() { _error = e.toString(); _navigating = false; });
+      setState(() {
+        _error = e.toString();
+        _navigating = false;
+      });
     }
   }
 
@@ -767,7 +835,11 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       if (ayahs.isEmpty) {
         debugPrint('[LoadPrev] Reached top of Quran');
         _justNavigated = false;
-        setState(() { _reachedTop = true; _loadingPrev = false; _navigating = false; });
+        setState(() {
+          _reachedTop = true;
+          _loadingPrev = false;
+          _navigating = false;
+        });
         return;
       }
       debugPrint('[LoadPrev] Got ${ayahs.length} ayahs '
@@ -783,20 +855,23 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // Frame A: apply correctBy for approximate position.
         if (_scrollController.hasClients) {
-          final pos    = _scrollController.position;
+          final pos = _scrollController.position;
           final newMax = pos.maxScrollExtent;
-          final delta  = newMax - oldMax;
-          debugPrint('[Nav-correctBy] BEFORE px=${pos.pixels.toStringAsFixed(0)} '
+          final delta = newMax - oldMax;
+          debugPrint(
+              '[Nav-correctBy] BEFORE px=${pos.pixels.toStringAsFixed(0)} '
               'oldMax=${oldMax.toStringAsFixed(0)} '
               'newMax=${newMax.toStringAsFixed(0)} '
               'delta=${delta.toStringAsFixed(0)}');
           if (delta > 0) {
             pos.correctBy(delta);
-            debugPrint('[Nav-correctBy] AFTER  px=${pos.pixels.toStringAsFixed(0)} '
+            debugPrint(
+                '[Nav-correctBy] AFTER  px=${pos.pixels.toStringAsFixed(0)} '
                 'max=${pos.maxScrollExtent.toStringAsFixed(0)}');
           }
         }
-        final buildCtx = this.context; // path.dart exports 'context' — use 'this' to get BuildContext
+        final buildCtx = this
+            .context; // path.dart exports 'context' — use 'this' to get BuildContext
         final initialMax = _scrollController.hasClients
             ? _scrollController.position.maxScrollExtent
             : 0.0;
@@ -819,23 +894,25 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
             // Pin the highlight item — ensureVisible if built, rough jump if not.
             final ctx = _highlightKey?.currentContext;
             if (ctx != null) {
-              Scrollable.ensureVisible(ctx, alignment: 0.25, duration: Duration.zero);
+              Scrollable.ensureVisible(ctx,
+                  alignment: 0.25, duration: Duration.zero);
             } else if (_scrollController.hasClients && _highlightId != null) {
               final idx = _ayahs.indexWhere((a) => a.id == _highlightId);
               if (idx >= 0 && _ayahs.length > 1) {
-                final pos  = _scrollController.position;
+                final pos = _scrollController.position;
                 final frac = idx / (_ayahs.length - 1);
-                _scrollController.jumpTo(
-                    (frac * pos.maxScrollExtent).clamp(0.0, pos.maxScrollExtent));
+                _scrollController.jumpTo((frac * pos.maxScrollExtent)
+                    .clamp(0.0, pos.maxScrollExtent));
               }
             }
             final currentMax = _scrollController.hasClients
                 ? _scrollController.position.maxScrollExtent
                 : prevMax;
-            final maxDelta  = (currentMax - prevMax).abs();
+            final maxDelta = (currentMax - prevMax).abs();
             final newStable = maxDelta < 5.0 ? stableCount + 1 : 0;
-            final kbHeight  = MediaQuery.of(buildCtx).viewInsets.bottom;
-            debugPrint('[pin] left=$framesLeft max=${currentMax.toStringAsFixed(0)} '
+            final kbHeight = MediaQuery.of(buildCtx).viewInsets.bottom;
+            debugPrint(
+                '[pin] left=$framesLeft max=${currentMax.toStringAsFixed(0)} '
                 'Δ=${maxDelta.toStringAsFixed(1)} stable=$newStable '
                 'kb=${kbHeight.toStringAsFixed(0)}');
             if ((kbHeight == 0 && newStable >= 5) || framesLeft <= 0) {
@@ -843,13 +920,14 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                   'stable=$newStable timedOut=${framesLeft <= 0}');
               _justNavigated = false;
               // Capture locals before setState so the delayed closure sees them.
-              final hlIdNow  = _highlightId;
+              final hlIdNow = _highlightId;
               final hlKeyNow = _highlightKey;
               // Mark this as the saved position baseline so we can detect
               // whether the user has scrolled away before the re-pin fires.
               if (hlIdNow != null) _lastKnownSaveId = hlIdNow;
               setState(() => _navigating = false);
-              debugPrint('[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
+              debugPrint(
+                  '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
               // Post-settle quiet re-pin: layout may still shift ~500ms after
               // overlay dismissal as off-screen items get measured. If user
               // hasn't scrolled away, silently re-pin the highlight one more time.
@@ -861,7 +939,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                 if (_userDragging) return;
                 final postCtx = hlKeyNow?.currentContext;
                 if (postCtx == null) return; // scrolled off screen
-                Scrollable.ensureVisible(postCtx, alignment: 0.25, duration: Duration.zero);
+                Scrollable.ensureVisible(postCtx,
+                    alignment: 0.25, duration: Duration.zero);
                 debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
               });
             } else {
@@ -869,12 +948,16 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
             }
           });
         }
+
         pinFrame(60, initialMax, 0);
       });
     } catch (e) {
       debugPrint('[LoadPrev] ERROR: $e');
       _justNavigated = false;
-      setState(() { _loadingPrev = false; _navigating = false; });
+      setState(() {
+        _loadingPrev = false;
+        _navigating = false;
+      });
     }
   }
 
@@ -891,7 +974,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
 
   void _onTapAyah(int id) {
     setState(() {
-      _highlightId  = id;
+      _highlightId = id;
       _highlightKey = GlobalKey();
       _tapHighlight = true;
     });
@@ -915,7 +998,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
       _scrollController.jumpTo(target);
       // _onScroll won't fire when jumpTo is a no-op (already at maxExtent),
       // so explicitly trigger a load when we're near the end of loaded content.
-      if (!_loadingMore && !_reachedBottom &&
+      if (!_loadingMore &&
+          !_reachedBottom &&
           pos.pixels >= pos.maxScrollExtent - 800) {
         _loadMore();
       }
@@ -941,9 +1025,24 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
     if (_speedLevel < 6) setState(() => _speedLevel++);
   }
 
+  Future<void> _checkTutorial() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = prefs.getBool('tutorial_shown') ?? false;
+    if (!seen && mounted) setState(() => _showTutorial = true);
+  }
+
+  void _dismissTutorial() {
+    setState(() => _showTutorial = false);
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool('tutorial_shown', true));
+  }
+
   Future<void> _doSearch(String query) async {
     if (query.length < 3) {
-      setState(() { _searchResults = []; _searching = false; });
+      setState(() {
+        _searchResults = [];
+        _searching = false;
+      });
       return;
     }
     setState(() => _searching = true);
@@ -983,7 +1082,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
               height: 64,
             ),
             const SizedBox(height: 8),
-            const Text('المصدر:', textAlign: TextAlign.center,
+            const Text('المصدر:',
+                textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, height: 1.6)),
             GestureDetector(
               onTap: () => launchUrl(
@@ -994,14 +1094,16 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                 'مجمع الملك فهد للقرآن الكريم',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 14, height: 1.6,
+                  fontSize: 14,
+                  height: 1.6,
                   color: Color(0xFF1E88E5),
                   decoration: TextDecoration.underline,
                 ),
               ),
             ),
             const SizedBox(height: 8),
-            const Text('للتواصل:', textAlign: TextAlign.center,
+            const Text('للتواصل:',
+                textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, height: 1.6)),
             GestureDetector(
               onTap: () => launchUrl(Uri.parse('mailto:info@progspace.sa')),
@@ -1009,7 +1111,8 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                 'info@progspace.sa',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 14, height: 1.6,
+                  fontSize: 14,
+                  height: 1.6,
                   color: Color(0xFF1E88E5),
                   decoration: TextDecoration.underline,
                 ),
@@ -1123,9 +1226,7 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                 // Left: surah name
                 Expanded(
                   child: Text(
-                    _currentSuraName.isNotEmpty
-                        ? 'سورة $_currentSuraName'
-                        : '',
+                    _currentSuraName.isNotEmpty ? 'سورة $_currentSuraName' : '',
                     textAlign: TextAlign.center,
                     textDirection: TextDirection.rtl,
                     style: TextStyle(
@@ -1170,234 +1271,263 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
           child: SizedBox(
             height: 56,
             child: Row(
-          children: [
-            const SizedBox(width: 4),
-            // Play / Pause
-            _barBtn(
-              icon: _autoScrolling ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              tooltip: _autoScrolling ? 'إيقاف' : 'تشغيل',
-              onPressed: _toggleAutoScroll,
-              isDark: isDark,
-            ),
-            const SizedBox(width: 4),
-            VerticalDivider(
-              width: 1, thickness: 1,
-              color: dividerColor,
-              indent: 12, endIndent: 12,
-            ),
-            const Spacer(),
-            // Speed control
-            _barBtn(
-              icon: Icons.remove,
-              tooltip: 'أبطأ',
-              onPressed: _speedDown,
-              isDark: isDark,
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Text(
-                '${_speedLevel + 1}',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: isDark ? Colors.white70 : Colors.black87,
+              children: [
+                const SizedBox(width: 4),
+                // Play / Pause
+                _barBtn(
+                  icon: _autoScrolling
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  tooltip: _autoScrolling ? 'إيقاف' : 'تشغيل',
+                  onPressed: _toggleAutoScroll,
+                  isDark: isDark,
                 ),
-              ),
+                const SizedBox(width: 4),
+                VerticalDivider(
+                  width: 1,
+                  thickness: 1,
+                  color: dividerColor,
+                  indent: 12,
+                  endIndent: 12,
+                ),
+                const Spacer(),
+                // Speed control
+                _barBtn(
+                  icon: Icons.remove,
+                  tooltip: 'أبطأ',
+                  onPressed: _speedDown,
+                  isDark: isDark,
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    '${_speedLevel + 1}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white70 : Colors.black87,
+                    ),
+                  ),
+                ),
+                _barBtn(
+                  icon: Icons.add,
+                  tooltip: 'أسرع',
+                  onPressed: _speedUp,
+                  isDark: isDark,
+                ),
+                const SizedBox(width: 8),
+              ],
             ),
-            _barBtn(
-              icon: Icons.add,
-              tooltip: 'أسرع',
-              onPressed: _speedUp,
-              isDark: isDark,
-            ),
-            const SizedBox(width: 8),
-          ],
-        ),
           ),
         ),
       ),
       body: Stack(
         children: [
-          GestureDetector(
-            onScaleStart: (_) {
-              _baseFontScale = _fontScale;
-              _isPinching = false;
-            },
-            onScaleUpdate: (d) {
-              if (d.pointerCount >= 2) {
-                if (!_isPinching) {
-                  // First frame with 2 fingers — re-anchor base scale here so
-                  // any drift while 1 finger was down doesn't cause a jump.
-                  _baseFontScale = _fontScale;
-                  setState(() => _isPinching = true);
-                }
-                setState(() {
-                  _fontScale = (_baseFontScale * d.scale).clamp(0.5, 3.0);
-                });
+          Listener(
+            // Detect 2-finger touch-down instantly (before any movement),
+            // so NeverScrollableScrollPhysics kicks in before the ListView
+            // can intercept the vertical component of the pinch gesture.
+            onPointerDown: (_) {
+              _pointerCount++;
+              if (_pointerCount >= 2 && !_isPinching) {
+                _baseFontScale = _fontScale; // anchor before first scale frame
+                setState(() => _isPinching = true);
               }
             },
-            onScaleEnd: (_) {
-              if (_isPinching) setState(() => _isPinching = false);
+            onPointerUp: (_) {
+              _pointerCount = (_pointerCount - 1).clamp(0, 10);
+              if (_pointerCount < 2 && _isPinching) {
+                setState(() => _isPinching = false);
+              }
             },
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (n) {
-                // Track whether the user's finger is actively dragging so
-                // the auto-scroll ticker can yield to manual input.
-                if (n is ScrollStartNotification && n.dragDetails != null) {
-                  _userDragging = true;
-                } else if (n is ScrollEndNotification) {
-                  _userDragging = false;
-                }
-                return false; // don't absorb — let _onScroll still fire
+            onPointerCancel: (_) {
+              _pointerCount = (_pointerCount - 1).clamp(0, 10);
+              if (_pointerCount < 2 && _isPinching) {
+                setState(() => _isPinching = false);
+              }
+            },
+            child: GestureDetector(
+              onScaleStart: (_) {
+                if (!_isPinching) _baseFontScale = _fontScale;
               },
-              child: ListView.builder(
-              controller: _scrollController,
-              // Disable scroll physics during pinch so the ListView yields
-              // pointer events to the parent ScaleGestureRecognizer.
-              physics: _isPinching
-                  ? const NeverScrollableScrollPhysics()
-                  : const ClampingScrollPhysics(),
-              // Larger cache ensures more back-buffer items are measured before
-              // correctBy fires, giving it a more accurate delta to work with.
-              cacheExtent: 1500,
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-              itemCount: _items.length,
-              itemBuilder: (context, index) {
-                final item = _items[index];
+              onScaleUpdate: (d) {
+                if (_isPinching) {
+                  setState(() {
+                    _fontScale = (_baseFontScale * d.scale).clamp(0.5, 3.0);
+                  });
+                }
+              },
+              onScaleEnd: (_) {}, // managed by Listener
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (n) {
+                  // Track whether the user's finger is actively dragging so
+                  // the auto-scroll ticker can yield to manual input.
+                  if (n is ScrollStartNotification && n.dragDetails != null) {
+                    _userDragging = true;
+                  } else if (n is ScrollEndNotification) {
+                    _userDragging = false;
+                  }
+                  return false; // don't absorb — let _onScroll still fire
+                },
+                child: ListView.builder(
+                  controller: _scrollController,
+                  // Disable scroll physics during pinch so the ListView yields
+                  // pointer events to the parent ScaleGestureRecognizer.
+                  physics: _isPinching
+                      ? const NeverScrollableScrollPhysics()
+                      : const ClampingScrollPhysics(),
+                  // Larger cache ensures more back-buffer items are measured before
+                  // correctBy fires, giving it a more accurate delta to work with.
+                  cacheExtent: 1500,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                  itemCount: _items.length,
+                  itemBuilder: (context, index) {
+                    final item = _items[index];
 
-                // ── Surah header ──────────────────────────────────────
-                if (item is _SurahHeader) {
-                  return Container(
-                    margin: const EdgeInsets.symmetric(vertical: 12),
-                    color: headerBg,
-                    child: Column(
-                      children: [
-                        Divider(height: 1, thickness: 1, color: dividerColor),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Text(
-                            'سورة ${item.suraNameAr}',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: headerTextColor,
+                    // ── Surah header ──────────────────────────────────────
+                    if (item is _SurahHeader) {
+                      return Container(
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        color: headerBg,
+                        child: Column(
+                          children: [
+                            Divider(
+                                height: 1, thickness: 1, color: dividerColor),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Text(
+                                'سورة ${item.suraNameAr}',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: headerTextColor,
+                                ),
+                              ),
                             ),
+                            Divider(
+                                height: 1, thickness: 1, color: dividerColor),
+                          ],
+                        ),
+                      );
+                    }
+
+                    // ── Basmala line (aya 1, surahs 2-8 and 10-114) ──────
+                    if (item is _BasmalaItem) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          item.text,
+                          textAlign: TextAlign.center,
+                          textDirection: TextDirection.rtl,
+                          style: TextStyle(
+                            fontFamily: 'CustomFont',
+                            fontSize: 28 * _fontScale,
+                            color: textColor,
+                            height: 1.8,
                           ),
                         ),
-                        Divider(height: 1, thickness: 1, color: dividerColor),
-                      ],
-                    ),
-                  );
-                }
+                      );
+                    }
 
-                // ── Basmala line (aya 1, surahs 2-8 and 10-114) ──────
-                if (item is _BasmalaItem) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      item.text,
-                      textAlign: TextAlign.center,
-                      textDirection: TextDirection.rtl,
-                      style: TextStyle(
+                    // ── Page marker ───────────────────────────────────────
+                    if (item is _PageMarker) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          children: [
+                            Expanded(
+                                child:
+                                    Divider(color: dividerColor, thickness: 1)),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
+                              child: Text(
+                                '${item.page}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color:
+                                      isDark ? Colors.white38 : Colors.black38,
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                                child:
+                                    Divider(color: dividerColor, thickness: 1)),
+                          ],
+                        ),
+                      );
+                    }
+
+                    // ── Ayah run ──────────────────────────────────────────
+                    if (item is _AyahRun) {
+                      final baseStyle = TextStyle(
                         fontFamily: 'CustomFont',
                         fontSize: 28 * _fontScale,
                         color: textColor,
                         height: 1.8,
-                      ),
-                    ),
-                  );
-                }
+                      );
+                      final hlColor = isDark
+                          ? const Color(0xFFFFD54F) // amber 300
+                          : const Color(0xFFF57F17); // amber 900
 
-                // ── Page marker ───────────────────────────────────────
-                if (item is _PageMarker) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Expanded(child: Divider(color: dividerColor, thickness: 1)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          child: Text(
-                            '${item.page}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white38 : Colors.black38,
-                            ),
+                      // Helper: build a tappable TextSpan for one ayah.
+                      TextSpan ayahSpan(Ayah a) => TextSpan(
+                            text: '${a.ayaText} ',
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () => _onTapAyah(a.id),
+                            style: a.id == _highlightId
+                                ? TextStyle(color: hlColor)
+                                : null,
+                          );
+
+                      final hasHighlight = _highlightId != null &&
+                          item.ayahs.any((a) => a.id == _highlightId);
+
+                      if (hasHighlight) {
+                        // Keep all ayahs in one RichText so the text flows
+                        // continuously (no paragraph break before the highlight).
+                        // A zero-size WidgetSpan anchors _highlightKey at the
+                        // exact highlight position so ensureVisible(alignment:0.0)
+                        // scrolls precisely to that ayah without splitting the run.
+                        final hlIdx =
+                            item.ayahs.indexWhere((a) => a.id == _highlightId);
+                        final before = item.ayahs.sublist(0, hlIdx);
+                        final fromHl = item.ayahs.sublist(hlIdx);
+                        return RichText(
+                          textDirection: TextDirection.rtl,
+                          textAlign: TextAlign.center,
+                          text: TextSpan(
+                            style: baseStyle,
+                            children: <InlineSpan>[
+                              ...before.map<InlineSpan>(ayahSpan),
+                              WidgetSpan(
+                                child: SizedBox.shrink(key: _highlightKey),
+                              ),
+                              ...fromHl.map<InlineSpan>(ayahSpan),
+                            ],
                           ),
+                        );
+                      }
+
+                      // No highlight — single RichText with tappable spans.
+                      return RichText(
+                        textDirection: TextDirection.rtl,
+                        textAlign: TextAlign.center,
+                        text: TextSpan(
+                          style: baseStyle,
+                          children:
+                              item.ayahs.map<InlineSpan>(ayahSpan).toList(),
                         ),
-                        Expanded(child: Divider(color: dividerColor, thickness: 1)),
-                      ],
-                    ),
-                  );
-                }
+                      );
+                    }
 
-                // ── Ayah run ──────────────────────────────────────────
-                if (item is _AyahRun) {
-                  final baseStyle = TextStyle(
-                    fontFamily: 'CustomFont',
-                    fontSize: 28 * _fontScale,
-                    color: textColor,
-                    height: 1.8,
-                  );
-                  final hlColor = isDark
-                      ? const Color(0xFFFFD54F)   // amber 300
-                      : const Color(0xFFF57F17);  // amber 900
-
-                  // Helper: build a tappable TextSpan for one ayah.
-                  TextSpan ayahSpan(Ayah a) => TextSpan(
-                    text: '${a.ayaText} ',
-                    recognizer: TapGestureRecognizer()
-                      ..onTap = () => _onTapAyah(a.id),
-                    style: a.id == _highlightId
-                        ? TextStyle(color: hlColor)
-                        : null,
-                  );
-
-                  final hasHighlight = _highlightId != null &&
-                      item.ayahs.any((a) => a.id == _highlightId);
-
-                  if (hasHighlight) {
-                    // Keep all ayahs in one RichText so the text flows
-                    // continuously (no paragraph break before the highlight).
-                    // A zero-size WidgetSpan anchors _highlightKey at the
-                    // exact highlight position so ensureVisible(alignment:0.0)
-                    // scrolls precisely to that ayah without splitting the run.
-                    final hlIdx = item.ayahs.indexWhere((a) => a.id == _highlightId);
-                    final before = item.ayahs.sublist(0, hlIdx);
-                    final fromHl = item.ayahs.sublist(hlIdx);
-                    return RichText(
-                      textDirection: TextDirection.rtl,
-                      textAlign: TextAlign.center,
-                      text: TextSpan(
-                        style: baseStyle,
-                        children: <InlineSpan>[
-                          ...before.map<InlineSpan>(ayahSpan),
-                          WidgetSpan(
-                            child: SizedBox.shrink(key: _highlightKey),
-                          ),
-                          ...fromHl.map<InlineSpan>(ayahSpan),
-                        ],
-                      ),
-                    );
-                  }
-
-                  // No highlight — single RichText with tappable spans.
-                  return RichText(
-                    textDirection: TextDirection.rtl,
-                    textAlign: TextAlign.center,
-                    text: TextSpan(
-                      style: baseStyle,
-                      children: item.ayahs.map<InlineSpan>(ayahSpan).toList(),
-                    ),
-                  );
-                }
-
-                return const SizedBox.shrink();
-              },
-            ),  // closes ListView.builder
-          ),    // closes NotificationListener
-          ),    // closes GestureDetector
+                    return const SizedBox.shrink();
+                  },
+                ), // closes ListView.builder
+              ), // closes NotificationListener
+            ), // closes GestureDetector
+          ), // closes Listener
           // ── Navigation overlay ─────────────────────────────────────
           // Shown during the entire navigate + back-buffer + correctBy
           // sequence so the user never sees a mid-load jump.
@@ -1424,205 +1554,347 @@ class _AyahsPageState extends State<AyahsPage> with SingleTickerProviderStateMix
                     child: SafeArea(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                        child: LayoutBuilder(builder: (_, lc) => Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              onTap: () {},
-                              child: Material(
-                                color: isDark
-                                    ? const Color(0xFF2C2C2E)
-                                    : Colors.white,
-                                borderRadius: BorderRadius.circular(18),
-                                elevation: 12,
-                                child: Padding(
-                                  padding:
-                                      const EdgeInsets.fromLTRB(16, 4, 8, 12),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      // Search field row
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: TextField(
-                                              controller: _searchCtrl,
-                                              autofocus: true,
-                                              textDirection: TextDirection.rtl,
-                                              style: TextStyle(
-                                                color: isDark
-                                                    ? Colors.white
-                                                    : Colors.black87,
-                                                fontSize: 16,
-                                              ),
-                                              decoration: InputDecoration(
-                                                hintText:
-                                                    'ابحث في القرآن الكريم...',
-                                                hintStyle: TextStyle(
-                                                  color: isDark
-                                                      ? Colors.white38
-                                                      : Colors.black38,
-                                                ),
-                                                border: InputBorder.none,
-                                                contentPadding:
-                                                    const EdgeInsets.symmetric(
-                                                        horizontal: 4,
-                                                        vertical: 12),
-                                              ),
-                                              onChanged: _doSearch,
-                                            ),
-                                          ),
-                                          IconButton(
-                                            icon: Icon(Icons.close,
-                                                color: isDark
-                                                    ? Colors.white54
-                                                    : Colors.black45),
-                                            onPressed: _closeSearch,
-                                          ),
-                                        ],
-                                      ),
-                                      // Spinner
-                                      if (_searching)
-                                        const Padding(
-                                          padding: EdgeInsets.symmetric(
-                                              vertical: 14),
-                                          child: SizedBox(
-                                            width: 22,
-                                            height: 22,
-                                            child: CircularProgressIndicator(
-                                                strokeWidth: 2),
-                                          ),
-                                        ),
-                                      // No results
-                                      if (!_searching &&
-                                          _searchResults.isEmpty &&
-                                          _searchCtrl.text.length >= 3)
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 14),
-                                          child: Text(
-                                            'لا توجد نتائج',
-                                            style: TextStyle(
-                                              color: isDark
-                                                  ? Colors.white38
-                                                  : Colors.black38,
-                                            ),
-                                          ),
-                                        ),
-                                      // Results — maxHeight shrinks with keyboard
-                                      if (!_searching &&
-                                          _searchResults.isNotEmpty) ...[
-                                        Divider(
-                                          color: isDark
-                                              ? Colors.white12
-                                              : Colors.black12,
-                                          height: 1,
-                                        ),
-                                        ConstrainedBox(
-                                          constraints: BoxConstraints(
-                                            // lc.maxHeight = body height minus
-                                            // keyboard minus overlay padding.
-                                            // Subtract ~96dp to account for the
-                                            // search field row (56) + card padding
-                                            // (16) + divider (1) + breathing room.
-                                            maxHeight:
-                                                (lc.maxHeight - 96)
-                                                    .clamp(40.0, 360.0),
-                                          ),
-                                          child: ListView.separated(
-                                            shrinkWrap: true,
-                                            itemCount: _searchResults.length,
-                                            separatorBuilder: (_, __) =>
-                                                Divider(
-                                              height: 1,
-                                              color: isDark
-                                                  ? Colors.white12
-                                                  : Colors.black12,
-                                            ),
-                                            itemBuilder: (ctx, i) {
-                                              final r = _searchResults[i];
-                                              return InkWell(
-                                                onTap: () {
-                                                  _closeSearch();
-                                                  _navigateTo(r.id);
-                                                },
-                                                child: Padding(
-                                                  padding: const EdgeInsets
-                                                      .symmetric(
-                                                      horizontal: 12,
-                                                      vertical: 10),
-                                                  child: Column(
-                                                    crossAxisAlignment:
-                                                        CrossAxisAlignment.end,
-                                                    children: [
-                                                      Row(
-                                                        mainAxisAlignment:
-                                                            MainAxisAlignment
-                                                                .spaceBetween,
-                                                        children: [
-                                                          Text(
-                                                            'آية ${r.ayaNo}',
-                                                            style: TextStyle(
-                                                              fontSize: 11,
-                                                              color: isDark
-                                                                  ? Colors
-                                                                      .white38
-                                                                  : Colors
-                                                                      .black38,
-                                                            ),
-                                                          ),
-                                                          Text(
-                                                            'سورة ${r.suraNameAr}',
-                                                            style: TextStyle(
-                                                              fontSize: 13,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              color: isDark
-                                                                  ? Colors
-                                                                      .white70
-                                                                  : Colors
-                                                                      .black87,
-                                                            ),
-                                                          ),
-                                                        ],
+                        child: LayoutBuilder(
+                            builder: (_, lc) => Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () {},
+                                      child: Material(
+                                        color: isDark
+                                            ? const Color(0xFF2C2C2E)
+                                            : Colors.white,
+                                        borderRadius: BorderRadius.circular(18),
+                                        elevation: 12,
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                              16, 4, 8, 12),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              // Search field row
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: TextField(
+                                                      controller: _searchCtrl,
+                                                      autofocus: true,
+                                                      textDirection:
+                                                          TextDirection.rtl,
+                                                      style: TextStyle(
+                                                        color: isDark
+                                                            ? Colors.white
+                                                            : Colors.black87,
+                                                        fontSize: 16,
                                                       ),
-                                                      const SizedBox(height: 4),
-                                                      Text(
-                                                        r.ayaTextEmlaey,
-                                                        textDirection:
-                                                            TextDirection.rtl,
-                                                        maxLines: 2,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        style: TextStyle(
-                                                          fontSize: 14,
+                                                      decoration:
+                                                          InputDecoration(
+                                                        hintText:
+                                                            'ابحث في القرآن الكريم...',
+                                                        hintStyle: TextStyle(
                                                           color: isDark
-                                                              ? Colors.white60
-                                                              : Colors.black87,
+                                                              ? Colors.white38
+                                                              : Colors.black38,
                                                         ),
+                                                        border:
+                                                            InputBorder.none,
+                                                        contentPadding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                horizontal: 4,
+                                                                vertical: 12),
                                                       ),
-                                                    ],
+                                                      onChanged: _doSearch,
+                                                    ),
+                                                  ),
+                                                  IconButton(
+                                                    icon: Icon(Icons.close,
+                                                        color: isDark
+                                                            ? Colors.white54
+                                                            : Colors.black45),
+                                                    onPressed: _closeSearch,
+                                                  ),
+                                                ],
+                                              ),
+                                              // Spinner
+                                              if (_searching)
+                                                const Padding(
+                                                  padding: EdgeInsets.symmetric(
+                                                      vertical: 14),
+                                                  child: SizedBox(
+                                                    width: 22,
+                                                    height: 22,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                            strokeWidth: 2),
                                                   ),
                                                 ),
-                                              );
-                                            },
+                                              // No results
+                                              if (!_searching &&
+                                                  _searchResults.isEmpty &&
+                                                  _searchCtrl.text.length >= 3)
+                                                Padding(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(vertical: 14),
+                                                  child: Text(
+                                                    'لا توجد نتائج',
+                                                    style: TextStyle(
+                                                      color: isDark
+                                                          ? Colors.white38
+                                                          : Colors.black38,
+                                                    ),
+                                                  ),
+                                                ),
+                                              // Results — maxHeight shrinks with keyboard
+                                              if (!_searching &&
+                                                  _searchResults
+                                                      .isNotEmpty) ...[
+                                                Divider(
+                                                  color: isDark
+                                                      ? Colors.white12
+                                                      : Colors.black12,
+                                                  height: 1,
+                                                ),
+                                                ConstrainedBox(
+                                                  constraints: BoxConstraints(
+                                                    // lc.maxHeight = body height minus
+                                                    // keyboard minus overlay padding.
+                                                    // Subtract ~96dp to account for the
+                                                    // search field row (56) + card padding
+                                                    // (16) + divider (1) + breathing room.
+                                                    maxHeight:
+                                                        (lc.maxHeight - 96)
+                                                            .clamp(40.0, 360.0),
+                                                  ),
+                                                  child: ListView.separated(
+                                                    shrinkWrap: true,
+                                                    itemCount:
+                                                        _searchResults.length,
+                                                    separatorBuilder: (_, __) =>
+                                                        Divider(
+                                                      height: 1,
+                                                      color: isDark
+                                                          ? Colors.white12
+                                                          : Colors.black12,
+                                                    ),
+                                                    itemBuilder: (ctx, i) {
+                                                      final r =
+                                                          _searchResults[i];
+                                                      return InkWell(
+                                                        onTap: () {
+                                                          _closeSearch();
+                                                          _navigateTo(r.id);
+                                                        },
+                                                        child: Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal:
+                                                                      12,
+                                                                  vertical: 10),
+                                                          child: Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .end,
+                                                            children: [
+                                                              Row(
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .spaceBetween,
+                                                                children: [
+                                                                  Text(
+                                                                    'آية ${r.ayaNo}',
+                                                                    style:
+                                                                        TextStyle(
+                                                                      fontSize:
+                                                                          11,
+                                                                      color: isDark
+                                                                          ? Colors
+                                                                              .white38
+                                                                          : Colors
+                                                                              .black38,
+                                                                    ),
+                                                                  ),
+                                                                  Text(
+                                                                    'سورة ${r.suraNameAr}',
+                                                                    style:
+                                                                        TextStyle(
+                                                                      fontSize:
+                                                                          13,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .bold,
+                                                                      color: isDark
+                                                                          ? Colors
+                                                                              .white70
+                                                                          : Colors
+                                                                              .black87,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                              const SizedBox(
+                                                                  height: 4),
+                                                              Text(
+                                                                r.ayaTextEmlaey,
+                                                                textDirection:
+                                                                    TextDirection
+                                                                        .rtl,
+                                                                maxLines: 2,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style:
+                                                                    TextStyle(
+                                                                  fontSize: 14,
+                                                                  color: isDark
+                                                                      ? Colors
+                                                                          .white60
+                                                                      : Colors
+                                                                          .black87,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
                                           ),
                                         ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        )),
+                                      ),
+                                    ),
+                                  ],
+                                )),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
+          // ── First-launch tutorial overlay ───────────────────────────
+          if (_showTutorial)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _dismissTutorial,
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.93),
+                  child: SafeArea(
+                    child: Center(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 28, vertical: 24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'مرحباً بك في القرآن الكريم يُسر',
+                              textAlign: TextAlign.center,
+                              textDirection: TextDirection.rtl,
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            // ── Card 1: Auto-scroll ──────────────────
+                            _TutorialCard(
+                              icon: Icons.play_circle_outline,
+                              title: 'التمرير التلقائي',
+                              body:
+                                  'اضغط على زر ▶ في الشريط السفلي لبدء التمرير التلقائي.\n'
+                                  'استخدم − و + للتحكم في السرعة.',
+                            ),
+                            const SizedBox(height: 16),
+                            // ── Card 2: Zoom ─────────────────────────
+                            _TutorialCard(
+                              icon: Icons.pinch_outlined,
+                              title: 'تكبير الخط وتصغيره',
+                              body:
+                                  'ضع إصبعين على الشاشة وقرّب بينهما أو باعد لتغيير حجم الخط.',
+                            ),
+                            const SizedBox(height: 28),
+                            GestureDetector(
+                              onTap: _dismissTutorial,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 40, vertical: 14),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFc9a84c),
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                                child: const Text(
+                                  'حسناً!',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Tutorial card helper ───────────────────────────────────────────────────
+
+class _TutorialCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String body;
+  const _TutorialCard(
+      {required this.icon, required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(18),
+        border:
+            Border.all(color: Colors.white.withValues(alpha: 0.18), width: 1),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: const Color(0xFFc9a84c), size: 40),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            textDirection: TextDirection.rtl,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            body,
+            textDirection: TextDirection.rtl,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.white.withValues(alpha: 0.85),
+              height: 1.7,
+            ),
+          ),
         ],
       ),
     );
@@ -1645,7 +1917,7 @@ class _NavSheetState extends State<_NavSheet> {
   bool _loadingSurahs = true;
   int _selectedSurahNo = 1;
 
-  final _pageCtrl  = TextEditingController();
+  final _pageCtrl = TextEditingController();
   final _ayaNoCtrl = TextEditingController();
 
   @override
@@ -1718,18 +1990,21 @@ class _NavSheetState extends State<_NavSheet> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final borderColor = isDark ? Colors.white24 : Colors.black12;
-    final labelStyle = TextStyle(color: isDark ? Colors.white70 : Colors.black87);
+    final labelStyle =
+        TextStyle(color: isDark ? Colors.white70 : Colors.black87);
     final modeLabels = ['صفحة', 'سورة', 'آية'];
 
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           // Drag handle
           Container(
             margin: const EdgeInsets.symmetric(vertical: 10),
-            width: 40, height: 4,
+            width: 40,
+            height: 4,
             decoration: BoxDecoration(
               color: isDark ? Colors.white24 : Colors.black26,
               borderRadius: BorderRadius.circular(2),
@@ -1747,10 +2022,13 @@ class _NavSheetState extends State<_NavSheet> {
                   child: GestureDetector(
                     onTap: () => setState(() => _mode = i),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 22, vertical: 9),
                       decoration: BoxDecoration(
                         color: selected
-                            ? (isDark ? Colors.white.withOpacity(0.15) : Colors.black87)
+                            ? (isDark
+                                ? Colors.white.withOpacity(0.15)
+                                : Colors.black87)
                             : Colors.transparent,
                         border: Border.all(color: borderColor),
                         borderRadius: BorderRadius.circular(20),
@@ -1761,7 +2039,8 @@ class _NavSheetState extends State<_NavSheet> {
                           color: selected
                               ? Colors.white
                               : (isDark ? Colors.white70 : Colors.black87),
-                          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                          fontWeight:
+                              selected ? FontWeight.bold : FontWeight.normal,
                         ),
                       ),
                     ),
@@ -1787,7 +2066,8 @@ class _NavSheetState extends State<_NavSheet> {
                         labelText: 'رقم الصفحة  (١ – ٦٠٤)',
                         labelStyle: labelStyle,
                         border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                       ),
                     ),
                   ),
@@ -1800,7 +2080,8 @@ class _NavSheetState extends State<_NavSheet> {
                     child: TextButton(
                       onPressed: _goToPage,
                       style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
                       ),
                       child: const Text('انتقل'),
                     ),
@@ -1811,7 +2092,9 @@ class _NavSheetState extends State<_NavSheet> {
           // ── Surah mode ────────────────────────────────────────────────
           if (_mode == 1)
             _loadingSurahs
-                ? const Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: CircularProgressIndicator())
                 : SizedBox(
                     height: 300,
                     child: ListView.builder(
@@ -1822,14 +2105,17 @@ class _NavSheetState extends State<_NavSheet> {
                           dense: true,
                           leading: Text('${s.no}',
                               style: TextStyle(
-                                  color: isDark ? Colors.white38 : Colors.black38,
+                                  color:
+                                      isDark ? Colors.white38 : Colors.black38,
                                   fontSize: 12)),
                           title: Text(s.nameAr,
                               style: TextStyle(
-                                  color: isDark ? Colors.white : Colors.black87)),
+                                  color:
+                                      isDark ? Colors.white : Colors.black87)),
                           trailing: Text('${s.ayaCount} آية',
                               style: TextStyle(
-                                  color: isDark ? Colors.white38 : Colors.black38,
+                                  color:
+                                      isDark ? Colors.white38 : Colors.black38,
                                   fontSize: 12)),
                           onTap: () => _goToSurah(s.no),
                         );
@@ -1839,7 +2125,9 @@ class _NavSheetState extends State<_NavSheet> {
           // ── Ayah mode ─────────────────────────────────────────────────
           if (_mode == 2)
             _loadingSurahs
-                ? const Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: CircularProgressIndicator())
                 : Padding(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
                     child: Column(
