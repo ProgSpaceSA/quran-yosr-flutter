@@ -260,14 +260,28 @@ class _AyahsPageState extends State<AyahsPage>
   bool _userDragging = false; // true while finger is actively dragging
   bool _isPinching = false; // true during 2-finger pinch-to-zoom
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
+  bool _showZoomBadge = false; // true while pinching + 1.5 s after release
+  Timer? _zoomBadgeTimer;
   bool _showTutorial = false; // true on first launch
-  int _speedLevel = 1; // 0 = slowest … 6 = fastest
+  int _speedLevel = 1; // 0 = slowest … 9 = fastest
   Ticker? _autoScrollTicker;
   Duration _lastTickElapsed = Duration.zero;
-  // px per millisecond for each of the 7 speed levels (reduced ~25% from v1)
-  static const _kSpeedPxPerMs = [0.007, 0.018, 0.045, 0.10, 0.19, 0.34, 0.60];
+  // px per millisecond for each of the 10 speed levels (geometric, max unchanged)
+  static const _kSpeedPxPerMs = [
+    0.007,
+    0.011,
+    0.019,
+    0.031,
+    0.051,
+    0.083,
+    0.14,
+    0.22,
+    0.37,
+    0.60,
+  ];
 
   static const _kPrefMinId = 'last_min_id';
+  static const _kPrefFontScale = 'font_scale';
   int _lastKnownSaveId =
       0; // cached so dispose() can write without a scroll controller
   bool _justNavigated = false; // blocks auto _loadPrev right after navigation
@@ -429,11 +443,14 @@ class _AyahsPageState extends State<AyahsPage>
     debugPrint('[Dispose] dispose — saving lastKnownSaveId=$_lastKnownSaveId');
     WakelockPlus.disable();
     _diagTimer?.cancel();
+    _zoomBadgeTimer?.cancel();
     _autoScrollTicker?.dispose();
     // Use cached ID — scroll controller has no clients by the time dispose() runs.
     if (_lastKnownSaveId > 0) {
-      SharedPreferences.getInstance()
-          .then((p) => p.setInt(_kPrefMinId, _lastKnownSaveId));
+      SharedPreferences.getInstance().then((p) {
+        p.setInt(_kPrefMinId, _lastKnownSaveId);
+        p.setDouble(_kPrefFontScale, _fontScale);
+      });
     }
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -537,7 +554,11 @@ class _AyahsPageState extends State<AyahsPage>
   Future<void> _loadInitial() async {
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getInt(_kPrefMinId) ?? 1;
-    debugPrint('[Init] Saved ayah id=$savedId');
+    final savedScale = prefs.getDouble(_kPrefFontScale) ?? 1.0;
+    if (savedScale != _fontScale) {
+      setState(() => _fontScale = savedScale.clamp(0.5, 3.0));
+    }
+    debugPrint('[Init] Saved ayah id=$savedId fontScale=$savedScale');
     try {
       // Look up the page of the saved ayah, and fetch the Basmala text once.
       final db = await _openDb();
@@ -581,15 +602,19 @@ class _AyahsPageState extends State<AyahsPage>
             'last-cp=0x${_basmalaText.runes.last.toRadixString(16)}');
       }
       final savedPage = pageRows.isNotEmpty ? pageRows.first['page'] as int : 1;
+      // Load a symmetric window: 4 pages before and 2 after the target.
+      // This pre-populates the back-buffer so correctBy is never needed —
+      // the target lands near the middle of the list and ensureVisible is
+      // guaranteed to find it regardless of zoom level.
+      final fromPage = (savedPage - 4).clamp(1, 604);
       final toPage = (savedPage + 2).clamp(1, 604);
       debugPrint(
-          '[Init] savedPage=$savedPage → loading pages $savedPage–$toPage');
+          '[Init] savedPage=$savedPage → loading pages $fromPage–$toPage');
 
-      // Phase 1: load from savedPage forward — user sees their position at top.
       final rows = await db.rawQuery(
         'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text '
         'FROM quran_ayahs WHERE page >= ? AND page <= ? ORDER BY id ASC',
-        [savedPage, toPage],
+        [fromPage, toPage],
       );
       await db.close();
 
@@ -618,13 +643,13 @@ class _AyahsPageState extends State<AyahsPage>
         _recomputeItems();
         _minId = ayahs.first.id;
         _maxId = ayahs.last.id;
-        _reachedTop = savedPage == 1;
+        _reachedTop = fromPage == 1;
         _reachedBottom = toPage >= 604;
         _initialLoading = false;
         // Initialise title bar from the saved ayah.
         _currentSuraName = target.suraNameAr;
         _currentJuz = _pageToJuz(target.page);
-        // Reuse the navigation overlay + stability-pinFrame path.
+        // Navigation overlay + stability-pinFrame path.
         _highlightId = savedId;
         _highlightKey = GlobalKey();
         _tapHighlight = false;
@@ -636,16 +661,21 @@ class _AyahsPageState extends State<AyahsPage>
           'resumeTarget=$savedId');
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) _scrollController.jumpTo(0);
-        if (savedPage > 1 && mounted && !_loadingPrev) {
-          debugPrint(
-              '[Init] Pre-loading back-buffer and pinning saved ayah...');
-          _loadPrevAndDismiss(); // correctBy + stability-pinFrame → dismisses overlay
-        } else {
-          // Already at the top of the Quran — no back-buffer needed.
+        if (!mounted) return;
+        if (fromPage == 1 && savedPage == 1) {
+          // Already at the very top — no rough jump needed.
           _justNavigated = false;
           setState(() => _navigating = false);
-          debugPrint('[Init] Settled — no back-buffer needed');
+          debugPrint('[Init] Settled — at top, no pin needed');
+        } else {
+          // Target is pre-buffered near the middle of the list.
+          // Rough jump brings it into cacheExtent; pinFrame corrects precisely.
+          _roughJumpToHighlight();
+          final initMax = _scrollController.hasClients
+              ? _scrollController.position.maxScrollExtent
+              : 0.0;
+          debugPrint('[Init] Rough jump done — starting pinFrame');
+          _runPinFrame(60, initMax, 0);
         }
       });
     } catch (e) {
@@ -756,7 +786,9 @@ class _AyahsPageState extends State<AyahsPage>
       );
       final targetPage =
           pageRows.isNotEmpty ? pageRows.first['page'] as int : 1;
-      final fromPage = targetPage;
+      // Symmetric window: 4 pages before + 2 after target.
+      // Back-buffer is pre-loaded so correctBy is never needed.
+      final fromPage = (targetPage - 4).clamp(1, 604);
       final toPage = (targetPage + 2).clamp(1, 604);
       debugPrint(
           '[Navigate] targetPage=$targetPage → loading pages $fromPage–$toPage');
@@ -807,15 +839,15 @@ class _AyahsPageState extends State<AyahsPage>
       });
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) _scrollController.jumpTo(0);
-        if (fromPage > 1 && mounted && !_loadingPrev) {
-          debugPrint('[Navigate] Pre-loading back-buffer...');
-          _loadPrevAndDismiss(); // dismisses overlay after correctBy
-        } else {
-          _justNavigated = false;
-          setState(() => _navigating = false);
-          debugPrint('[Navigate] Settled — overlay dismissed');
-        }
+        if (!mounted) return;
+        // Target is pre-buffered; rough jump brings it into cacheExtent,
+        // then pinFrame corrects precisely — no correctBy needed.
+        _roughJumpToHighlight();
+        final initMax = _scrollController.hasClients
+            ? _scrollController.position.maxScrollExtent
+            : 0.0;
+        debugPrint('[Navigate] Rough jump done — starting pinFrame');
+        _runPinFrame(60, initMax, 0);
       });
     } catch (e) {
       setState(() {
@@ -825,140 +857,69 @@ class _AyahsPageState extends State<AyahsPage>
     }
   }
 
-  // Like _loadPrev, but dismisses the navigation overlay after correctBy runs.
-  Future<void> _loadPrevAndDismiss() async {
-    debugPrint('[LoadPrev] Fetching id < $_minId');
-    setState(() => _loadingPrev = true);
-    try {
-      final ayahs =
-          (await _fetch('id < ?', [_minId], 'id DESC')).reversed.toList();
-      if (ayahs.isEmpty) {
-        debugPrint('[LoadPrev] Reached top of Quran');
-        _justNavigated = false;
-        setState(() {
-          _reachedTop = true;
-          _loadingPrev = false;
-          _navigating = false;
-        });
-        return;
+  // ── Position helpers ──────────────────────────────────────────────────────
+
+  /// Rough-scrolls the list so the highlighted ayah is approximately centred.
+  /// Uses item-index fraction of maxScrollExtent — zoom-independent because
+  /// we only need to land within cacheExtent (1500 px) of the target; the
+  /// precise correction is done by ensureVisible in _runPinFrame.
+  void _roughJumpToHighlight() {
+    if (!_scrollController.hasClients || _highlightId == null) return;
+    final itemIdx = _items.indexWhere(
+      (it) => it is _AyahRun && it.ayahs.any((a) => a.id == _highlightId),
+    );
+    if (itemIdx < 0 || _items.length <= 1) return;
+    final frac = itemIdx / (_items.length - 1);
+    final pos = _scrollController.position;
+    _scrollController
+        .jumpTo((frac * pos.maxScrollExtent).clamp(0.0, pos.maxScrollExtent));
+  }
+
+  /// Frame-by-frame pin loop.  Calls ensureVisible each frame until the scroll
+  /// position has been stable for 5 consecutive frames (layout fully settled).
+  /// Falls back to _roughJumpToHighlight if the target widget is not yet built.
+  void _runPinFrame(int framesLeft, double prevMax, int stableCount) {
+    final buildCtx = this.context; // capture before async gap
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _highlightKey?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx, alignment: 0.25, duration: Duration.zero);
+      } else {
+        _roughJumpToHighlight(); // pull target into cacheExtent, try again next frame
       }
-      debugPrint('[LoadPrev] Got ${ayahs.length} ayahs '
-          '(ids ${ayahs.first.id}–${ayahs.last.id})');
-      final oldMax = _scrollController.position.maxScrollExtent;
-      setState(() {
-        _ayahs.insertAll(0, ayahs);
-        _recomputeItems();
-        _minId = ayahs.first.id;
-        _reachedTop = _minId == 1;
-        _loadingPrev = false;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Frame A: apply correctBy for approximate position.
-        if (_scrollController.hasClients) {
-          final pos = _scrollController.position;
-          final newMax = pos.maxScrollExtent;
-          final delta = newMax - oldMax;
-          debugPrint(
-              '[Nav-correctBy] BEFORE px=${pos.pixels.toStringAsFixed(0)} '
-              'oldMax=${oldMax.toStringAsFixed(0)} '
-              'newMax=${newMax.toStringAsFixed(0)} '
-              'delta=${delta.toStringAsFixed(0)}');
-          if (delta > 0) {
-            pos.correctBy(delta);
-            debugPrint(
-                '[Nav-correctBy] AFTER  px=${pos.pixels.toStringAsFixed(0)} '
-                'max=${pos.maxScrollExtent.toStringAsFixed(0)}');
-          }
-        }
-        final buildCtx = this
-            .context; // path.dart exports 'context' — use 'this' to get BuildContext
-        final initialMax = _scrollController.hasClients
-            ? _scrollController.position.maxScrollExtent
-            : 0.0;
-
-        // Frames B+: re-pin the highlighted item every frame.
-        // Navigation is only considered done when ALL three hold:
-        //   (a) keyboard is fully gone (viewInsets.bottom == 0)
-        //   (b) maxScrollExtent has not changed by more than 5 px for 3
-        //       consecutive frames (layout has fully settled after item
-        //       re-measurement — this is the root cause of the first-touch jump)
-        //   (c) safety cap: at most 60 frames (~1 s at 60 fps) so we never
-        //       hang if something unexpected prevents stability.
-        //
-        // If the highlight item is outside cacheExtent (ctx == null), we fall
-        // back to a rough fraction-based jumpTo to pull it into the cache, then
-        // ensureVisible can work on the next frame.
-        void pinFrame(int framesLeft, double prevMax, int stableCount) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            // Pin the highlight item — ensureVisible if built, rough jump if not.
-            final ctx = _highlightKey?.currentContext;
-            if (ctx != null) {
-              Scrollable.ensureVisible(ctx,
-                  alignment: 0.25, duration: Duration.zero);
-            } else if (_scrollController.hasClients && _highlightId != null) {
-              final idx = _ayahs.indexWhere((a) => a.id == _highlightId);
-              if (idx >= 0 && _ayahs.length > 1) {
-                final pos = _scrollController.position;
-                final frac = idx / (_ayahs.length - 1);
-                _scrollController.jumpTo((frac * pos.maxScrollExtent)
-                    .clamp(0.0, pos.maxScrollExtent));
-              }
-            }
-            final currentMax = _scrollController.hasClients
-                ? _scrollController.position.maxScrollExtent
-                : prevMax;
-            final maxDelta = (currentMax - prevMax).abs();
-            final newStable = maxDelta < 5.0 ? stableCount + 1 : 0;
-            final kbHeight = MediaQuery.of(buildCtx).viewInsets.bottom;
-            debugPrint(
-                '[pin] left=$framesLeft max=${currentMax.toStringAsFixed(0)} '
-                'Δ=${maxDelta.toStringAsFixed(1)} stable=$newStable '
-                'kb=${kbHeight.toStringAsFixed(0)}');
-            if ((kbHeight == 0 && newStable >= 5) || framesLeft <= 0) {
-              debugPrint('[Nav-ensureVisible] settled hl=$_highlightId '
-                  'stable=$newStable timedOut=${framesLeft <= 0}');
-              _justNavigated = false;
-              // Capture locals before setState so the delayed closure sees them.
-              final hlIdNow = _highlightId;
-              final hlKeyNow = _highlightKey;
-              // Mark this as the saved position baseline so we can detect
-              // whether the user has scrolled away before the re-pin fires.
-              if (hlIdNow != null) _lastKnownSaveId = hlIdNow;
-              setState(() => _navigating = false);
-              debugPrint(
-                  '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
-              // Post-settle quiet re-pin: layout may still shift ~500ms after
-              // overlay dismissal as off-screen items get measured. If user
-              // hasn't scrolled away, silently re-pin the highlight one more time.
-              Future.delayed(const Duration(milliseconds: 500), () {
-                if (!mounted || _navigating) return;
-                // Only skip if user's finger is actively down. Don't use
-                // _lastKnownSaveId — layout-induced scroll changes update it
-                // and silently block the re-pin on startup.
-                if (_userDragging) return;
-                final postCtx = hlKeyNow?.currentContext;
-                if (postCtx == null) return; // scrolled off screen
-                Scrollable.ensureVisible(postCtx,
-                    alignment: 0.25, duration: Duration.zero);
-                debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
-              });
-            } else {
-              pinFrame(framesLeft - 1, currentMax, newStable);
-            }
-          });
-        }
-
-        pinFrame(60, initialMax, 0);
-      });
-    } catch (e) {
-      debugPrint('[LoadPrev] ERROR: $e');
-      _justNavigated = false;
-      setState(() {
-        _loadingPrev = false;
-        _navigating = false;
-      });
-    }
+      final pos =
+          _scrollController.hasClients ? _scrollController.position : null;
+      final currentMax = pos?.maxScrollExtent ?? prevMax;
+      final maxDelta = (currentMax - prevMax).abs();
+      final newStable = maxDelta < 5.0 ? stableCount + 1 : 0;
+      final kbHeight = MediaQuery.of(buildCtx).viewInsets.bottom;
+      debugPrint('[pin] left=$framesLeft max=${currentMax.toStringAsFixed(0)} '
+          'Δ=${maxDelta.toStringAsFixed(1)} stable=$newStable '
+          'kb=${kbHeight.toStringAsFixed(0)}');
+      if ((kbHeight == 0 && newStable >= 5) || framesLeft <= 0) {
+        debugPrint('[Nav-ensureVisible] settled hl=$_highlightId '
+            'stable=$newStable timedOut=${framesLeft <= 0}');
+        _justNavigated = false;
+        final hlIdNow = _highlightId;
+        final hlKeyNow = _highlightKey;
+        if (hlIdNow != null) _lastKnownSaveId = hlIdNow;
+        setState(() => _navigating = false);
+        debugPrint(
+            '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!mounted || _navigating) return;
+          if (_userDragging) return;
+          final postCtx = hlKeyNow?.currentContext;
+          if (postCtx == null) return;
+          Scrollable.ensureVisible(postCtx,
+              alignment: 0.25, duration: Duration.zero);
+          debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
+        });
+      } else {
+        _runPinFrame(framesLeft - 1, currentMax, newStable);
+      }
+    });
   }
 
   void _openSearch() {
@@ -1022,7 +983,7 @@ class _AyahsPageState extends State<AyahsPage>
   }
 
   void _speedUp() {
-    if (_speedLevel < 6) setState(() => _speedLevel++);
+    if (_speedLevel < 9) setState(() => _speedLevel++);
   }
 
   Future<void> _checkTutorial() async {
@@ -1331,19 +1292,37 @@ class _AyahsPageState extends State<AyahsPage>
               _pointerCount++;
               if (_pointerCount >= 2 && !_isPinching) {
                 _baseFontScale = _fontScale; // anchor before first scale frame
-                setState(() => _isPinching = true);
+                _zoomBadgeTimer?.cancel();
+                setState(() {
+                  _isPinching = true;
+                  _showZoomBadge = true;
+                });
               }
             },
             onPointerUp: (_) {
               _pointerCount = (_pointerCount - 1).clamp(0, 10);
               if (_pointerCount < 2 && _isPinching) {
                 setState(() => _isPinching = false);
+                SharedPreferences.getInstance()
+                    .then((p) => p.setDouble(_kPrefFontScale, _fontScale));
+                _zoomBadgeTimer?.cancel();
+                _zoomBadgeTimer =
+                    Timer(const Duration(milliseconds: 1500), () {
+                  if (mounted) setState(() => _showZoomBadge = false);
+                });
               }
             },
             onPointerCancel: (_) {
               _pointerCount = (_pointerCount - 1).clamp(0, 10);
               if (_pointerCount < 2 && _isPinching) {
                 setState(() => _isPinching = false);
+                SharedPreferences.getInstance()
+                    .then((p) => p.setDouble(_kPrefFontScale, _fontScale));
+                _zoomBadgeTimer?.cancel();
+                _zoomBadgeTimer =
+                    Timer(const Duration(milliseconds: 1500), () {
+                  if (mounted) setState(() => _showZoomBadge = false);
+                });
               }
             },
             child: GestureDetector(
@@ -1528,6 +1507,37 @@ class _AyahsPageState extends State<AyahsPage>
               ), // closes NotificationListener
             ), // closes GestureDetector
           ), // closes Listener
+          // ── Zoom badge ─────────────────────────────────────────────
+          Positioned(
+            top: 72,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _showZoomBadge ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 220),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      borderRadius: BorderRadius.circular(28),
+                    ),
+                    child: Text(
+                      '${_fontScale.toStringAsFixed(1)}×',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
           // ── Navigation overlay ─────────────────────────────────────
           // Shown during the entire navigate + back-buffer + correctBy
           // sequence so the user never sees a mid-load jump.
@@ -1804,10 +1814,10 @@ class _AyahsPageState extends State<AyahsPage>
                             // ── Card 1: Auto-scroll ──────────────────
                             _TutorialCard(
                               icon: Icons.play_circle_outline,
-                              title: 'التمرير التلقائي',
+                              title: 'التحريك التلقائي',
                               body:
-                                  'اضغط على زر ▶ في الشريط السفلي لبدء التمرير التلقائي.\n'
-                                  'استخدم − و + للتحكم في السرعة.',
+                                  'اضغط على زر ▶ في الشريط السفلي لبدء التحريك التلقائي.\n'
+                                  'استخدم − و + للتحكم بالسرعة.',
                             ),
                             const SizedBox(height: 16),
                             // ── Card 2: Zoom ─────────────────────────
@@ -1828,7 +1838,7 @@ class _AyahsPageState extends State<AyahsPage>
                                   borderRadius: BorderRadius.circular(30),
                                 ),
                                 child: const Text(
-                                  'حسناً!',
+                                  'حسناً',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
