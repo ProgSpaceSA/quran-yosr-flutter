@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>يستخدم الميكروفون للاستماع إلى تلاوتك وتتبع موضعك في القرآن الكريم.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>يستخدم التعرف على الكلام لتتبع تلاوتك وتحديد الآية الحالية تلقائياً.</string>
 </dict>
 </plist>

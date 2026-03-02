@@ -12,6 +12,10 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'src/follow/normalizer.dart';
+import 'src/follow/aligner.dart';
+import 'src/follow/follow_controller.dart';
+import 'src/follow/asr_engine.dart';
 
 void main() => runApp(const MyApp());
 
@@ -109,6 +113,7 @@ class Ayah {
   final int page;
   final String suraNameAr;
   final String ayaText;
+  final String ayaTextEmlaey; // plain Arabic for search + follow-mode alignment
 
   Ayah({
     required this.id,
@@ -117,6 +122,7 @@ class Ayah {
     required this.page,
     required this.suraNameAr,
     required this.ayaText,
+    required this.ayaTextEmlaey,
   });
 }
 
@@ -192,19 +198,21 @@ Widget _barBtn({
   required VoidCallback onPressed,
   required String tooltip,
   required bool isDark,
+  Color? color, // optional icon/border tint (e.g. active mic = red)
 }) {
+  final tint = color ?? (isDark ? Colors.white70 : Colors.black87);
   return Padding(
     padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
     child: Container(
       decoration: BoxDecoration(
         border: Border.all(
-          color: isDark ? Colors.white24 : Colors.black12,
+          color: color ?? (isDark ? Colors.white24 : Colors.black12),
           width: 1,
         ),
         borderRadius: BorderRadius.circular(8),
       ),
       child: IconButton(
-        icon: Icon(icon),
+        icon: Icon(icon, color: tint),
         tooltip: tooltip,
         onPressed: onPressed,
         padding: const EdgeInsets.all(6),
@@ -262,6 +270,17 @@ class _AyahsPageState extends State<AyahsPage>
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
+
+  // ── Follow mode ─────────────────────────────────────────────────────────
+  bool              _followActive = false;
+  FollowStatus      _followStatus = FollowStatus.idle;
+  AsrEngine?        _asrEngine;
+  FollowController? _followController;
+  StreamSubscription<String>? _asrSub;
+  String            _followTranscript = ''; // live ASR text (debug subtitle)
+  String            _followDebug      = ''; // live score/match info
+  int?              _followCurrentId;       // last ayah confirmed by follow scroll
+
   bool _showTutorial = false; // true on first launch
   int _speedLevel = 1; // 0 = slowest … 9 = fastest
   Ticker? _autoScrollTicker;
@@ -434,6 +453,7 @@ class _AyahsPageState extends State<AyahsPage>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       if (_autoScrolling) _stopAutoScroll();
+      if (_followActive) _stopFollow();
     }
   }
 
@@ -444,6 +464,9 @@ class _AyahsPageState extends State<AyahsPage>
     WakelockPlus.disable();
     _diagTimer?.cancel();
     _zoomBadgeTimer?.cancel();
+    _asrSub?.cancel();
+    _followController?.dispose();
+    _asrEngine?.dispose();
     _autoScrollTicker?.dispose();
     // Use cached ID — scroll controller has no clients by the time dispose() runs.
     if (_lastKnownSaveId > 0) {
@@ -534,7 +557,7 @@ class _AyahsPageState extends State<AyahsPage>
       String where, List<Object> args, String order) async {
     final db = await _openDb();
     final rows = await db.rawQuery(
-      'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text '
+      'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text, aya_text_emlaey '
       'FROM quran_ayahs WHERE $where ORDER BY $order LIMIT $_chunk',
       args,
     );
@@ -547,6 +570,7 @@ class _AyahsPageState extends State<AyahsPage>
               page: r['page'] as int,
               suraNameAr: r['sura_name_ar'] as String,
               ayaText: _colToString(r['aya_text']),
+              ayaTextEmlaey: _colToString(r['aya_text_emlaey']),
             ))
         .toList();
   }
@@ -612,7 +636,7 @@ class _AyahsPageState extends State<AyahsPage>
           '[Init] savedPage=$savedPage → loading pages $fromPage–$toPage');
 
       final rows = await db.rawQuery(
-        'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text '
+        'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text, aya_text_emlaey '
         'FROM quran_ayahs WHERE page >= ? AND page <= ? ORDER BY id ASC',
         [fromPage, toPage],
       );
@@ -626,6 +650,7 @@ class _AyahsPageState extends State<AyahsPage>
                 page: r['page'] as int,
                 suraNameAr: r['sura_name_ar'] as String,
                 ayaText: _colToString(r['aya_text']),
+                ayaTextEmlaey: _colToString(r['aya_text_emlaey']),
               ))
           .toList();
 
@@ -794,7 +819,7 @@ class _AyahsPageState extends State<AyahsPage>
           '[Navigate] targetPage=$targetPage → loading pages $fromPage–$toPage');
 
       final rows = await db.rawQuery(
-        'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text '
+        'SELECT id, sura_no, aya_no, page, sura_name_ar, aya_text, aya_text_emlaey '
         'FROM quran_ayahs WHERE page >= ? AND page <= ? ORDER BY id ASC',
         [fromPage, toPage],
       );
@@ -808,6 +833,7 @@ class _AyahsPageState extends State<AyahsPage>
                 page: r['page'] as int,
                 suraNameAr: r['sura_name_ar'] as String,
                 ayaText: _colToString(r['aya_text']),
+                ayaTextEmlaey: _colToString(r['aya_text_emlaey']),
               ))
           .toList();
 
@@ -919,6 +945,121 @@ class _AyahsPageState extends State<AyahsPage>
       } else {
         _runPinFrame(framesLeft - 1, currentMax, newStable);
       }
+    });
+  }
+
+  // ── Follow mode ─────────────────────────────────────────────────────────
+
+  /// Lightweight scroll to [id] without a full reload or overlay.
+  /// Called by FollowController; respects navigation and user-drag guards.
+  void _softScrollTo(int id) {
+    if (_navigating || _userDragging) return;
+    if (_highlightId == id) return;
+    // Never scroll backward — follow mode only advances forward.
+    if (_followCurrentId != null && id < _followCurrentId!) return;
+    if (id < _minId || id > _maxId) {
+      // Drifted outside the loaded window — do a full navigate.
+      _followCurrentId = id;
+      _navigateTo(id);
+      return;
+    }
+    _followCurrentId = id; // advance the follow window center
+    final newKey = GlobalKey();
+    setState(() {
+      _highlightId = id;
+      _highlightKey = newKey;
+      _tapHighlight = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = newKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.25,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  /// Returns ±N ayahs around the current reading position as IndexedAyah
+  /// entries ready for the aligner. Called on every ASR transcript.
+  List<IndexedAyah> _buildFollowWindow() {
+    if (_ayahs.isEmpty) return [];
+    final currentId = _followCurrentId ?? _lastKnownSaveId;
+    final ci = _ayahs.indexWhere((a) => a.id == currentId);
+    final center = ci < 0 ? 0 : ci;
+    // Tight window: current ayah + 2 ahead only (no page-jumping).
+    final start = center.clamp(0, _ayahs.length - 1);
+    final end   = (center + 3).clamp(0, _ayahs.length);
+    return _ayahs.sublist(start, end).map((a) => IndexedAyah(
+      id:         a.id,
+      suraNo:     a.suraNo,
+      ayaNo:      a.ayaNo,
+      normTokens: tokenize(normalizeArabic(a.ayaTextEmlaey)),
+    )).toList();
+  }
+
+  Future<void> _startFollow() async {
+    if (_followActive) return;
+    _stopAutoScroll(); // follow mode and auto-scroll are mutually exclusive
+
+    final engine = SpeechToTextEngine();
+    final ok = await engine.initialize();
+    if (!mounted) { engine.dispose(); return; }
+    if (!ok) {
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        const SnackBar(content: Text('التعرف على الصوت غير متاح على هذا الجهاز')),
+      );
+      engine.dispose();
+      return;
+    }
+
+    final controller = FollowController(
+      onScrollTo:     _softScrollTo,
+      getWindow:      _buildFollowWindow,
+      onStatusChange: (s) {
+        if (mounted) setState(() => _followStatus = s);
+      },
+      onDebug: (msg) {
+        if (mounted) setState(() => _followDebug = msg);
+      },
+    );
+
+    setState(() {
+      _asrEngine        = engine;
+      _followController = controller;
+      _followActive     = true;
+      _followStatus     = FollowStatus.listening;
+      _followCurrentId  = _highlightId ?? _lastKnownSaveId; // seed window at current position
+    });
+
+    controller.start();
+    _asrSub = engine.transcripts.listen((text) {
+      if (mounted) setState(() => _followTranscript = text);
+      controller.onTranscript(text);
+    });
+    await engine.start();
+  }
+
+  Future<void> _stopFollow() async {
+    if (!_followActive) return;
+    await _asrEngine?.stop();
+    _asrSub?.cancel();
+    _followController?.stop();
+    _followController?.dispose();
+    _asrEngine?.dispose();
+    setState(() {
+      _followActive       = false;
+      _followStatus       = FollowStatus.idle;
+      _asrEngine          = null;
+      _followController   = null;
+      _asrSub             = null;
+      _followTranscript   = '';
+      _followDebug        = '';
+      _followCurrentId    = null;
     });
   }
 
@@ -1251,6 +1392,18 @@ class _AyahsPageState extends State<AyahsPage>
                   indent: 12,
                   endIndent: 12,
                 ),
+                const SizedBox(width: 4),
+                // Follow mode (read-aloud tracking)
+                _barBtn(
+                  icon: _followActive
+                      ? Icons.mic_rounded
+                      : Icons.mic_none_rounded,
+                  tooltip: _followActive ? 'إيقاف المتابعة' : 'متابعة القراءة',
+                  onPressed: () =>
+                      _followActive ? _stopFollow() : _startFollow(),
+                  isDark: isDark,
+                  color: _followActive ? Colors.redAccent : null,
+                ),
                 const Spacer(),
                 // Speed control
                 _barBtn(
@@ -1538,6 +1691,56 @@ class _AyahsPageState extends State<AyahsPage>
               ),
             ),
           ),
+          // ── Follow transcript subtitle (debug) ─────────────────────
+          if (_followActive && _followTranscript.isNotEmpty)
+            Positioned(
+              bottom: 36,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.72),
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 8, horizontal: 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _followTranscript,
+                        textDirection: TextDirection.rtl,
+                        textAlign: TextAlign.center,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          height: 1.5,
+                        ),
+                      ),
+                      if (_followDebug.isNotEmpty)
+                        Text(
+                          _followDebug,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.yellowAccent,
+                            fontSize: 11,
+                            height: 1.4,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          // ── Follow status banner ────────────────────────────────────
+          if (_followActive)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _FollowBanner(status: _followStatus, isDark: isDark),
+            ),
           // ── Navigation overlay ─────────────────────────────────────
           // Shown during the entire navigate + back-buffer + correctBy
           // sequence so the user never sees a mid-load jump.
@@ -1855,6 +2058,45 @@ class _AyahsPageState extends State<AyahsPage>
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Follow status banner ───────────────────────────────────────────────────
+
+class _FollowBanner extends StatelessWidget {
+  final FollowStatus status;
+  final bool isDark;
+  const _FollowBanner({required this.status, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (status) {
+      FollowStatus.listening  => ('استماع...', const Color(0xFF4CAF50)),
+      FollowStatus.matching   => ('يتابع...', const Color(0xFF2196F3)),
+      FollowStatus.weakMatch  => ('إشارة ضعيفة...', const Color(0xFFFF9800)),
+      FollowStatus.lost       => ('تحدث بوضوح...', const Color(0xFFF44336)),
+      FollowStatus.idle       => ('', Colors.transparent),
+    };
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Container(
+      color: color.withValues(alpha: 0.92),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.mic_rounded, size: 14, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
