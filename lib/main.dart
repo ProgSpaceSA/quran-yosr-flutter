@@ -126,6 +126,22 @@ class Ayah {
   });
 }
 
+// ── Bookmark model ──────────────────────────────────────────────────────────
+
+class _Bookmark {
+  final int    ayahId;
+  final int    suraNo;
+  final int    ayaNo;
+  final String suraNameAr;
+
+  const _Bookmark({
+    required this.ayahId,
+    required this.suraNo,
+    required this.ayaNo,
+    required this.suraNameAr,
+  });
+}
+
 // ── Display item types ──────────────────────────────────────────────────────
 
 abstract class _Item {}
@@ -198,10 +214,11 @@ Widget _barBtn({
   required VoidCallback onPressed,
   required String tooltip,
   required bool isDark,
-  Color? color, // optional icon/border tint (e.g. active mic = red)
+  Color? color,         // optional icon/border tint (e.g. active mic = red)
+  VoidCallback? onLongPress,
 }) {
   final tint = color ?? (isDark ? Colors.white70 : Colors.black87);
-  return Padding(
+  final inner = Padding(
     padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
     child: Container(
       decoration: BoxDecoration(
@@ -221,6 +238,8 @@ Widget _barBtn({
       ),
     ),
   );
+  if (onLongPress == null) return inner;
+  return GestureDetector(onLongPress: onLongPress, child: inner);
 }
 
 // ── AyahsPage ──────────────────────────────────────────────────────────────
@@ -277,9 +296,9 @@ class _AyahsPageState extends State<AyahsPage>
   AsrEngine?        _asrEngine;
   FollowController? _followController;
   StreamSubscription<String>? _asrSub;
-  String            _followTranscript = ''; // live ASR text (debug subtitle)
-  String            _followDebug      = ''; // live score/match info
   int?              _followCurrentId;       // last ayah confirmed by follow scroll
+  int               _followMatchedTokens = 0; // word progress in current ayah
+  int               _followTotalTokens   = 0;
 
   bool _showTutorial = false; // true on first launch
   int _speedLevel = 1; // 0 = slowest … 9 = fastest
@@ -299,8 +318,14 @@ class _AyahsPageState extends State<AyahsPage>
     0.60,
   ];
 
-  static const _kPrefMinId = 'last_min_id';
-  static const _kPrefFontScale = 'font_scale';
+  static const _kPrefMinId       = 'last_min_id';
+  static const _kPrefFontScale   = 'font_scale';
+  static const _kPrefBookmarks   = 'bookmarks';
+
+  List<_Bookmark> _bookmarks          = [];
+  Timer?          _bookmarkSaveDebounce;
+  _Bookmark? get  _activeBookmark     => _bookmarks.isEmpty ? null : _bookmarks.first;
+
   int _lastKnownSaveId =
       0; // cached so dispose() can write without a scroll controller
   bool _justNavigated = false; // blocks auto _loadPrev right after navigation
@@ -464,6 +489,7 @@ class _AyahsPageState extends State<AyahsPage>
     WakelockPlus.disable();
     _diagTimer?.cancel();
     _zoomBadgeTimer?.cancel();
+    _bookmarkSaveDebounce?.cancel();
     _asrSub?.cancel();
     _followController?.dispose();
     _asrEngine?.dispose();
@@ -577,12 +603,20 @@ class _AyahsPageState extends State<AyahsPage>
 
   Future<void> _loadInitial() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedId = prefs.getInt(_kPrefMinId) ?? 1;
+    final savedId    = prefs.getInt(_kPrefMinId) ?? 1;
     final savedScale = prefs.getDouble(_kPrefFontScale) ?? 1.0;
     if (savedScale != _fontScale) {
       setState(() => _fontScale = savedScale.clamp(0.5, 3.0));
     }
-    debugPrint('[Init] Saved ayah id=$savedId fontScale=$savedScale');
+    final bookmarksRaw = prefs.getString(_kPrefBookmarks);
+    if (bookmarksRaw != null) {
+      try {
+        _bookmarks = _decodeBookmarks(bookmarksRaw);
+      } catch (_) {
+        _bookmarks = []; // corrupt — overwritten on next save
+      }
+    }
+    debugPrint('[Init] Saved ayah id=$savedId fontScale=$savedScale bookmarks=${_bookmarks.length}');
     try {
       // Look up the page of the saved ayah, and fetch the Basmala text once.
       final db = await _openDb();
@@ -952,11 +986,34 @@ class _AyahsPageState extends State<AyahsPage>
 
   /// Lightweight scroll to [id] without a full reload or overlay.
   /// Called by FollowController; respects navigation and user-drag guards.
-  void _softScrollTo(int id) {
+  /// [matchedTokens]/[totalTokens] drive intra-ayah word-level positioning.
+  void _softScrollTo(int id, int matchedTokens, int totalTokens) {
     if (_navigating || _userDragging) return;
-    if (_highlightId == id) return;
     // Never scroll backward — follow mode only advances forward.
     if (_followCurrentId != null && id < _followCurrentId!) return;
+
+    if (_highlightId == id) {
+      // Same ayah — just advance the word anchor if progress changed.
+      if (_followMatchedTokens == matchedTokens) return;
+      setState(() {
+        _followMatchedTokens = matchedTokens;
+        _followTotalTokens   = totalTokens;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final ctx = _highlightKey?.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(
+            ctx,
+            alignment: 0.25,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+      return;
+    }
+
     if (id < _minId || id > _maxId) {
       // Drifted outside the loaded window — do a full navigate.
       _followCurrentId = id;
@@ -966,9 +1023,11 @@ class _AyahsPageState extends State<AyahsPage>
     _followCurrentId = id; // advance the follow window center
     final newKey = GlobalKey();
     setState(() {
-      _highlightId = id;
-      _highlightKey = newKey;
-      _tapHighlight = false;
+      _highlightId         = id;
+      _highlightKey        = newKey;
+      _tapHighlight        = false;
+      _followMatchedTokens = matchedTokens;
+      _followTotalTokens   = totalTokens;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -1023,9 +1082,6 @@ class _AyahsPageState extends State<AyahsPage>
       onStatusChange: (s) {
         if (mounted) setState(() => _followStatus = s);
       },
-      onDebug: (msg) {
-        if (mounted) setState(() => _followDebug = msg);
-      },
     );
 
     setState(() {
@@ -1038,7 +1094,6 @@ class _AyahsPageState extends State<AyahsPage>
 
     controller.start();
     _asrSub = engine.transcripts.listen((text) {
-      if (mounted) setState(() => _followTranscript = text);
       controller.onTranscript(text);
     });
     await engine.start();
@@ -1057,8 +1112,6 @@ class _AyahsPageState extends State<AyahsPage>
       _asrEngine          = null;
       _followController   = null;
       _asrSub             = null;
-      _followTranscript   = '';
-      _followDebug        = '';
       _followCurrentId    = null;
     });
   }
@@ -1233,6 +1286,133 @@ class _AyahsPageState extends State<AyahsPage>
     );
   }
 
+  // ── Bookmark helpers ────────────────────────────────────────────────────
+
+  Ayah? _findAyahById(int id) {
+    for (final a in _ayahs) {
+      if (a.id == id) return a;
+    }
+    return null;
+  }
+
+  String _toArabicNumerals(int n) {
+    const digits = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
+    return n.toString().split('').map((c) => digits[int.parse(c)]).join();
+  }
+
+  String _encodeBookmarks(List<_Bookmark> list) => jsonEncode({
+    'v': 1,
+    'items': list.map((b) => {
+      'id': b.ayahId,
+      's':  b.suraNo,
+      'a':  b.ayaNo,
+      'n':  b.suraNameAr,
+    }).toList(),
+  });
+
+  List<_Bookmark> _decodeBookmarks(String raw) {
+    final map   = jsonDecode(raw) as Map<String, dynamic>;
+    final items = (map['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    return items
+        .map((m) => _Bookmark(
+              ayahId:     (m['id'] as int?)    ?? 0,
+              suraNo:     (m['s']  as int?)    ?? 0,
+              ayaNo:      (m['a']  as int?)    ?? 0,
+              suraNameAr: (m['n']  as String?) ?? '',
+            ))
+        .where((b) => b.ayahId > 0)
+        .toList();
+  }
+
+  void _saveBookmarks() {
+    _bookmarkSaveDebounce?.cancel();
+    _bookmarkSaveDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      SharedPreferences.getInstance()
+          .then((p) => p.setString(_kPrefBookmarks, _encodeBookmarks(_bookmarks)));
+    });
+  }
+
+  void _addBookmark(Ayah a) {
+    _bookmarks.removeWhere((b) => b.ayahId == a.id);
+    _bookmarks.insert(0, _Bookmark(
+      ayahId:     a.id,
+      suraNo:     a.suraNo,
+      ayaNo:      a.ayaNo,
+      suraNameAr: a.suraNameAr,
+    ));
+    if (_bookmarks.length > 50) _bookmarks = _bookmarks.sublist(0, 50);
+    setState(() {});
+    _saveBookmarks();
+    _showBookmarkSnackBar(a);
+  }
+
+  void _saveCurrentPosition() {
+    // Compute mid-screen ayah on demand (same formula as 100ms sampler).
+    Ayah? target;
+    if (_scrollController.hasClients && _ayahs.isNotEmpty) {
+      final max = _scrollController.position.maxScrollExtent;
+      if (max > 0) {
+        final frac = (_scrollController.position.pixels / max).clamp(0.0, 1.0);
+        final idx  = (frac * (_ayahs.length - 1)).round();
+        target = _ayahs[idx];
+      }
+    }
+    // Fall back to highlighted ayah if scroll not available.
+    target ??= _highlightId != null ? _findAyahById(_highlightId!) : null;
+
+    if (target == null) {
+      final BuildContext ctx = this.context;
+      ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+        content: Text('انتظر لحظة ثم أعد المحاولة', textDirection: TextDirection.rtl),
+        duration: Duration(seconds: 2),
+      ));
+      return;
+    }
+    _addBookmark(target);
+  }
+
+  void _showBookmarkSnackBar(Ayah a) {
+    final BuildContext ctx = this.context;
+    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+      content: Text(
+        'تم الحفظ — ${a.suraNameAr} ${_toArabicNumerals(a.ayaNo)}',
+        textDirection: TextDirection.rtl,
+      ),
+      duration: const Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  void _showBookmarksSheet() {
+    final BuildContext ctx = this.context;
+    showModalBottomSheet(
+      context: ctx,
+      isScrollControlled: true,
+      backgroundColor: widget.isDark ? _bgDark : _bgLight,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _BookmarkSheet(
+        bookmarks:        List.unmodifiable(_bookmarks),
+        isDark:           widget.isDark,
+        toArabicNumerals: _toArabicNumerals,
+        onNavigate: (id) {
+          Navigator.pop(ctx);
+          _navigateTo(id);
+        },
+        onDelete: (id) {
+          setState(() => _bookmarks.removeWhere((b) => b.ayahId == id));
+          _saveBookmarks();
+          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+            content: Text('تم حذف الإشارة', textDirection: TextDirection.rtl),
+            duration: Duration(seconds: 2),
+          ));
+        },
+      ),
+    );
+  }
+
   void _showNavSheet() {
     _stopAutoScroll();
     final ctx = this.context;
@@ -1403,6 +1583,18 @@ class _AyahsPageState extends State<AyahsPage>
                       _followActive ? _stopFollow() : _startFollow(),
                   isDark: isDark,
                   color: _followActive ? Colors.redAccent : null,
+                ),
+                const SizedBox(width: 4),
+                // Bookmark — tap saves position, long-press opens history
+                _barBtn(
+                  icon: _activeBookmark != null
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  tooltip: 'إشارة مرجعية',
+                  color: _activeBookmark != null ? Colors.amberAccent : null,
+                  onPressed: _saveCurrentPosition,
+                  onLongPress: _showBookmarksSheet,
+                  isDark: isDark,
                 ),
                 const Spacer(),
                 // Speed control
@@ -1616,40 +1808,115 @@ class _AyahsPageState extends State<AyahsPage>
                       final hasHighlight = _highlightId != null &&
                           item.ayahs.any((a) => a.id == _highlightId);
 
+                      // Long-press target: highlighted ayah if in this run, else first.
+                      void onRunLongPress() {
+                        final target = item.ayahs.firstWhere(
+                          (a) => a.id == _highlightId,
+                          orElse: () => item.ayahs.first,
+                        );
+                        HapticFeedback.mediumImpact();
+                        _addBookmark(target);
+                      }
+
                       if (hasHighlight) {
                         // Keep all ayahs in one RichText so the text flows
                         // continuously (no paragraph break before the highlight).
-                        // A zero-size WidgetSpan anchors _highlightKey at the
-                        // exact highlight position so ensureVisible(alignment:0.0)
-                        // scrolls precisely to that ayah without splitting the run.
+                        // A zero-size WidgetSpan anchors _highlightKey; during
+                        // follow mode it is repositioned mid-ayah at the
+                        // matched-word boundary so ensureVisible tracks the
+                        // current reading word, not just the ayah start.
                         final hlIdx =
                             item.ayahs.indexWhere((a) => a.id == _highlightId);
-                        final before = item.ayahs.sublist(0, hlIdx);
-                        final fromHl = item.ayahs.sublist(hlIdx);
-                        return RichText(
-                          textDirection: TextDirection.rtl,
-                          textAlign: TextAlign.center,
-                          text: TextSpan(
-                            style: baseStyle,
-                            children: <InlineSpan>[
-                              ...before.map<InlineSpan>(ayahSpan),
-                              WidgetSpan(
-                                child: SizedBox.shrink(key: _highlightKey),
-                              ),
-                              ...fromHl.map<InlineSpan>(ayahSpan),
-                            ],
+                        final before  = item.ayahs.sublist(0, hlIdx);
+                        final hlAyah  = item.ayahs[hlIdx];
+                        final afterHl = item.ayahs.sublist(hlIdx + 1);
+                        final hlStyle = TextStyle(color: hlColor);
+
+                        // Build the highlighted-ayah span with the anchor
+                        // positioned at the matched-word offset (follow mode)
+                        // or at the ayah start (tap-highlight).
+                        final List<InlineSpan> hlChildren = [];
+                        if (!_tapHighlight && _followTotalTokens > 0) {
+                          final progress =
+                              (_followMatchedTokens / _followTotalTokens)
+                                  .clamp(0.0, 1.0);
+                          // Phase 2: use TextPainter to map word-progress →
+                          // character offset, accounting for actual line breaks
+                          // in the rendered text (line-aware, not word-count-linear).
+                          final tp = TextPainter(
+                            text: TextSpan(
+                                text: hlAyah.ayaText,
+                                style: baseStyle.merge(hlStyle)),
+                            textDirection: TextDirection.rtl,
+                          );
+                          final availW = MediaQuery.sizeOf(context).width;
+                          tp.layout(maxWidth: availW);
+                          final rawOffset = tp
+                              .getPositionForOffset(
+                                  Offset(availW / 2, progress * tp.height))
+                              .offset
+                              .clamp(0, hlAyah.ayaText.length);
+                          tp.dispose();
+
+                          // Snap backward to a word boundary so we never
+                          // split mid-word (which would let Flutter line-break
+                          // inside the word between the two TextSpans).
+                          int splitAt = rawOffset;
+                          while (splitAt > 0 &&
+                              hlAyah.ayaText[splitAt - 1] != ' ') {
+                            splitAt--;
+                          }
+
+                          final beforeText =
+                              hlAyah.ayaText.substring(0, splitAt);
+                          final afterText =
+                              hlAyah.ayaText.substring(splitAt);
+                          if (beforeText.isNotEmpty) {
+                            hlChildren.add(
+                                TextSpan(text: beforeText, style: hlStyle));
+                          }
+                          hlChildren.add(WidgetSpan(
+                              child: SizedBox.shrink(key: _highlightKey)));
+                          // trailing space is the inter-ayah separator
+                          hlChildren.add(
+                              TextSpan(text: '$afterText ', style: hlStyle));
+                        } else {
+                          // Tap-highlight: anchor at start of highlighted ayah.
+                          hlChildren
+                            ..add(WidgetSpan(
+                                child: SizedBox.shrink(key: _highlightKey)))
+                            ..add(TextSpan(
+                                text: '${hlAyah.ayaText} ', style: hlStyle));
+                        }
+
+                        return GestureDetector(
+                          onLongPress: onRunLongPress,
+                          child: RichText(
+                            textDirection: TextDirection.rtl,
+                            textAlign: TextAlign.center,
+                            text: TextSpan(
+                              style: baseStyle,
+                              children: <InlineSpan>[
+                                ...before.map<InlineSpan>(ayahSpan),
+                                TextSpan(children: hlChildren),
+                                ...afterHl.map<InlineSpan>(ayahSpan),
+                              ],
+                            ),
                           ),
                         );
                       }
 
                       // No highlight — single RichText with tappable spans.
-                      return RichText(
-                        textDirection: TextDirection.rtl,
-                        textAlign: TextAlign.center,
-                        text: TextSpan(
-                          style: baseStyle,
-                          children:
-                              item.ayahs.map<InlineSpan>(ayahSpan).toList(),
+                      return GestureDetector(
+                        onLongPress: onRunLongPress,
+                        child: RichText(
+                          textDirection: TextDirection.rtl,
+                          textAlign: TextAlign.center,
+                          text: TextSpan(
+                            style: baseStyle,
+                            children:
+                                item.ayahs.map<InlineSpan>(ayahSpan).toList(),
+                          ),
                         ),
                       );
                     }
@@ -1691,48 +1958,6 @@ class _AyahsPageState extends State<AyahsPage>
               ),
             ),
           ),
-          // ── Follow transcript subtitle (debug) ─────────────────────
-          if (_followActive && _followTranscript.isNotEmpty)
-            Positioned(
-              bottom: 36,
-              left: 0,
-              right: 0,
-              child: IgnorePointer(
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.72),
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 8, horizontal: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _followTranscript,
-                        textDirection: TextDirection.rtl,
-                        textAlign: TextAlign.center,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          height: 1.5,
-                        ),
-                      ),
-                      if (_followDebug.isNotEmpty)
-                        Text(
-                          _followDebug,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.yellowAccent,
-                            fontSize: 11,
-                            height: 1.4,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
           // ── Follow status banner ────────────────────────────────────
           if (_followActive)
             Positioned(
@@ -2442,6 +2667,127 @@ class _NavSheetState extends State<_NavSheet> {
                   ),
           const SizedBox(height: 12),
         ],
+      ),
+    );
+  }
+}
+
+// ── Bookmark bottom sheet ───────────────────────────────────────────────────
+
+class _BookmarkSheet extends StatefulWidget {
+  final List<_Bookmark>          bookmarks;
+  final bool                     isDark;
+  final String Function(int)     toArabicNumerals;
+  final void Function(int ayahId) onNavigate;
+  final void Function(int ayahId) onDelete;
+
+  const _BookmarkSheet({
+    required this.bookmarks,
+    required this.isDark,
+    required this.toArabicNumerals,
+    required this.onNavigate,
+    required this.onDelete,
+  });
+
+  @override
+  State<_BookmarkSheet> createState() => _BookmarkSheetState();
+}
+
+class _BookmarkSheetState extends State<_BookmarkSheet> {
+  late List<_Bookmark> _local;
+
+  @override
+  void initState() {
+    super.initState();
+    _local = List.of(widget.bookmarks);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark       = widget.isDark;
+    final textColor    = isDark ? Colors.white : Colors.black87;
+    final subColor     = isDark ? Colors.white54 : Colors.black45;
+    final amberColor   = Colors.amberAccent;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(top: 16, bottom: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.bookmarks_rounded, color: amberColor, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'الإشارات المرجعية',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: textColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (_local.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Text(
+                  'لا توجد إشارات بعد',
+                  style: TextStyle(color: subColor, fontSize: 14),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 360),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _local.length,
+                  itemBuilder: (_, i) {
+                    final b       = _local[i];
+                    final isActive = i == 0;
+                    return Dismissible(
+                      key: ValueKey(b.ayahId),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        color: Colors.redAccent.withValues(alpha: 0.18),
+                        child: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                      ),
+                      onDismissed: (_) {
+                        setState(() => _local.removeAt(i));
+                        widget.onDelete(b.ayahId);
+                      },
+                      child: ListTile(
+                        tileColor: isActive
+                            ? Colors.amberAccent.withValues(alpha: 0.08)
+                            : null,
+                        leading: Icon(
+                          isActive
+                              ? Icons.bookmark_rounded
+                              : Icons.bookmark_border_rounded,
+                          color: isActive ? amberColor : subColor,
+                          size: 20,
+                        ),
+                        title: Text(
+                          '${b.suraNameAr}  ${widget.toArabicNumerals(b.ayaNo)}',
+                          style: TextStyle(color: textColor, fontSize: 15),
+                          textDirection: TextDirection.rtl,
+                        ),
+                        onTap: () => widget.onNavigate(b.ayahId),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 4),
+          ],
+        ),
       ),
     );
   }

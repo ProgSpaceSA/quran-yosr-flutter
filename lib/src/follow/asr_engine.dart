@@ -26,6 +26,11 @@ class SpeechToTextEngine implements AsrEngine {
   bool _initialized = false;
   bool _active      = false;
 
+  // True if the current/last session produced at least one transcript word.
+  // Used to back off on restarts after silent (empty) sessions so we don't
+  // hammer Android's SpeechRecognizer and get rate-limited.
+  bool _sessionHadSpeech = false;
+
   // Best Arabic locale found on this device; falls back to 'ar'.
   String _localeId = 'ar';
 
@@ -38,9 +43,15 @@ class SpeechToTextEngine implements AsrEngine {
       onError:  (e) => debugPrint('[ASR] Error: ${e.errorMsg}'),
       onStatus: (s) {
         debugPrint('[ASR] Status: $s');
-        // Automatically restart when the recogniser stops mid-session.
-        if (s == SpeechToText.notListeningStatus && _active) {
-          Future.delayed(const Duration(milliseconds: 300), _doListen);
+        if (s == SpeechToText.doneStatus && _active) {
+          // After a session with speech restart quickly (300 ms).
+          // After an empty/silent session use a longer back-off (2 s) to
+          // avoid hammering Android's SpeechRecognizer and getting blocked.
+          final delay = _sessionHadSpeech
+              ? const Duration(milliseconds: 300)
+              : const Duration(seconds: 2);
+          _sessionHadSpeech = false; // reset for next session
+          Future.delayed(delay, _doListen);
         }
       },
     );
@@ -52,6 +63,7 @@ class SpeechToTextEngine implements AsrEngine {
   Future<void> start() async {
     if (!_initialized) return;
     _active = true;
+    _sessionHadSpeech = false;
     await _doListen();
   }
 
@@ -76,8 +88,8 @@ class SpeechToTextEngine implements AsrEngine {
     await _stt.listen(
       onResult:    _onResult,
       localeId:    _localeId,
-      listenFor:   const Duration(seconds: 30),
-      pauseFor:    const Duration(seconds: 5),
+      listenFor:   const Duration(minutes: 2),
+      pauseFor:    const Duration(seconds: 20),
       listenOptions: SpeechListenOptions(
         listenMode:     ListenMode.dictation,
         cancelOnError:  false,
@@ -90,6 +102,7 @@ class SpeechToTextEngine implements AsrEngine {
   void _onResult(SpeechRecognitionResult result) {
     final words = result.recognizedWords.trim();
     if (words.isNotEmpty) {
+      _sessionHadSpeech = true;
       debugPrint('[ASR] transcript: $words (final=${result.finalResult})');
       _ctrl.add(words);
     }

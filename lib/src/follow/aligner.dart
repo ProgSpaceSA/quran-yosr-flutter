@@ -16,9 +16,11 @@ class IndexedAyah {
 
 /// Result returned by [align].
 class AlignResult {
-  final int ayahId;
-  final double score; // 0.0 – 1.0
-  const AlignResult(this.ayahId, this.score);
+  final int    ayahId;
+  final double score;         // 0.0 – 1.0
+  final int    matchedTokens; // how far into the ayah the transcript reached
+  final int    totalTokens;   // total tokens in the matched ayah
+  const AlignResult(this.ayahId, this.score, this.matchedTokens, this.totalTokens);
 }
 
 /// Greedy sequential token match.
@@ -49,6 +51,9 @@ double scoreTokens(List<String> query, List<String> target, {int cap = 12}) {
 /// Finds the best matching ayah for [rollingTokens] among [candidates].
 ///
 /// Returns null when no candidate reaches [minScore].
+/// [AlignResult.matchedTokens] is the position in the ayah token list after
+/// the last successful match — a proxy for how far through the ayah the user
+/// has read (used for intra-ayah word-level scroll positioning).
 AlignResult? align(
   List<String> rollingTokens,
   List<IndexedAyah> candidates, {
@@ -57,9 +62,23 @@ AlignResult? align(
   if (rollingTokens.isEmpty || candidates.isEmpty) return null;
   AlignResult? best;
   for (final c in candidates) {
-    final score = scoreTokens(rollingTokens, c.normTokens);
+    // Inline greedy match so we can capture the last-matched position.
+    // `ti` is the forward scan cursor; `lastMatchedTi` is the position
+    // after the last token that was actually found in the ayah.
+    // We use `lastMatchedTi` (not `ti`) so that an unmatched trailing
+    // transcript word doesn't push the cursor to the ayah end and give a
+    // falsely-large progress value.
+    int matched = 0;
+    int ti = 0;
+    int lastMatchedTi = 0;
+    for (final token in rollingTokens) {
+      while (ti < c.normTokens.length && c.normTokens[ti] != token) { ti++; }
+      if (ti < c.normTokens.length) { matched++; ti++; lastMatchedTi = ti; }
+    }
+    final denom = min(rollingTokens.length, 12).toDouble();
+    final score = matched / (denom < 1 ? 1 : denom);
     if (score >= minScore && (best == null || score > best.score)) {
-      best = AlignResult(c.id, score);
+      best = AlignResult(c.id, score, lastMatchedTi, c.normTokens.length);
     }
   }
   return best;

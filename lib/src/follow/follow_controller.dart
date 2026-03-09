@@ -23,8 +23,9 @@ class FollowController {
   static const _kLostAfter = Duration(seconds: 6);
   static const _kStableNeeded = 1; // one strong match is enough to scroll
 
-  /// Integrator scrolls to this ayah id.
-  final void Function(int ayahId) onScrollTo;
+  /// Integrator scrolls to [ayahId]; [matchedTokens]/[totalTokens] give the
+  /// intra-ayah word-progress so the caller can reposition the scroll anchor.
+  final void Function(int ayahId, int matchedTokens, int totalTokens) onScrollTo;
 
   /// Provides the current ±N ayah window for alignment.
   final List<IndexedAyah> Function() getWindow;
@@ -127,7 +128,7 @@ class FollowController {
 
     if (_stableCount >= _kStableNeeded && gapOk) {
       _lastScrollTime = now;
-      onScrollTo(result.ayahId);
+      onScrollTo(result.ayahId, result.matchedTokens, result.totalTokens);
     }
   }
 
