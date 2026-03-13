@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/gestures.dart' show TapGestureRecognizer;
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart';
@@ -260,6 +261,8 @@ class _AyahsPageState extends State<AyahsPage>
   bool _userDragging = false; // true while finger is actively dragging
   bool _isPinching = false; // true during 2-finger pinch-to-zoom
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
+  double _zoomAnchorOffset = 0.0; // scroll pixels at pinch start (for proportional restore)
+  bool _zoomRestorePending = false; // only one postFrameCallback queued at a time
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
   bool _showTutorial = false; // true on first launch
@@ -282,8 +285,12 @@ class _AyahsPageState extends State<AyahsPage>
 
   static const _kPrefMinId = 'last_min_id';
   static const _kPrefFontScale = 'font_scale';
+  static const _kPrefAnchorOffset = 'anchor_offset';
   int _lastKnownSaveId =
       0; // cached so dispose() can write without a scroll controller
+  // Keys for each rendered _AyahRun, keyed by run's first ayah id.
+  // Used to scan for visible runs at save time.
+  final Map<int, GlobalKey> _runKeyCache = {};
   bool _justNavigated = false; // blocks auto _loadPrev right after navigation
   bool _navigating = false; // overlay shown during navigate + back-buffer load
   DateTime _prevCooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
@@ -434,7 +441,91 @@ class _AyahsPageState extends State<AyahsPage>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       if (_autoScrolling) _stopAutoScroll();
+      // Reset gesture flags: OS may cancel active touches without sending
+      // pointer-up events (e.g. notification drawer, home button), leaving
+      // _userDragging true and silently blocking the auto-scroll ticker.
+      _userDragging = false;
+      _isPinching = false;
+      _pointerCount = 0;
+      // Save precise reading position before app is backgrounded.
+      _schedulePositionSave();
+    } else if (state == AppLifecycleState.resumed) {
+      // Safety net: clear any flags that may have gone stale across the gap.
+      _userDragging = false;
+      _isPinching = false;
+      _pointerCount = 0;
     }
+  }
+
+  /// Records scroll position + scale at pinch start.
+  void _captureZoomAnchor() {
+    if (!_scrollController.hasClients) return;
+    _zoomAnchorOffset = _scrollController.position.pixels; // reuse field as startPixels
+    // _zoomAnchorRunId reused as start-scale * 1000 (int) for storage without new field
+  }
+
+  /// After each scale-change rebuild, scale pixels proportionally so the
+  /// same document position stays in view. Content height scales linearly
+  /// with _fontScale, so targetPixels = startPixels × (newScale / startScale).
+  void _restoreZoomAnchor() {
+    if (!_isPinching || !_scrollController.hasClients) return;
+    if (_baseFontScale == 0) return;
+    final pos = _scrollController.position;
+    final target = (_zoomAnchorOffset * (_fontScale / _baseFontScale))
+        .clamp(0.0, pos.maxScrollExtent);
+    _scrollController.jumpTo(target);
+  }
+
+  void _schedulePositionSave() {
+    if (!mounted || !_scrollController.hasClients || _ayahs.isEmpty) return;
+    _doSaveReadingPosition();
+  }
+
+  /// Scans all visible _AyahRun widgets via _runKeyCache, picks the one
+  /// closest to mid-viewport, and saves anchor id + top offset to prefs.
+  void _doSaveReadingPosition() {
+    if (!mounted || !_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final viewportH = pos.viewportDimension;
+
+    double bestOffset = viewportH / 2; // fallback: mid-screen
+    int bestAnchorId =
+        _lastKnownSaveId > 0 ? _lastKnownSaveId : (_ayahs.isNotEmpty ? _ayahs.first.id : 0);
+    bool measured = false;
+    double bestDist = double.infinity;
+
+    for (final entry in _runKeyCache.entries) {
+      final ctx = entry.value.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      try {
+        final revealOffset =
+            RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
+        final topOnScreen = revealOffset - pos.pixels;
+        final h = box.size.height;
+        // Only consider runs overlapping the viewport.
+        if (topOnScreen < viewportH && topOnScreen + h > 0) {
+          final dist = ((topOnScreen + h / 2) - viewportH / 2).abs();
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestOffset = topOnScreen;
+            bestAnchorId = entry.key;
+            measured = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    _lastKnownSaveId = bestAnchorId;
+    debugPrint('[Save] anchor=$_lastKnownSaveId '
+        'localOffset=${bestOffset.toStringAsFixed(1)} scale=$_fontScale '
+        'measured=$measured');
+    SharedPreferences.getInstance().then((p) {
+      p.setInt(_kPrefMinId, _lastKnownSaveId);
+      p.setDouble(_kPrefAnchorOffset, bestOffset);
+      p.setDouble(_kPrefFontScale, _fontScale);
+    });
   }
 
   @override
@@ -496,7 +587,6 @@ class _AyahsPageState extends State<AyahsPage>
             'px=${pos.pixels.toStringAsFixed(0)}/${pos.maxScrollExtent.toStringAsFixed(0)})');
         SharedPreferences.getInstance()
             .then((p) => p.setInt(_kPrefMinId, saveId));
-        // Update title bar whenever the visible ayah changes.
         final juz = _pageToJuz(ayah.page);
         if (ayah.suraNameAr != _currentSuraName || juz != _currentJuz) {
           setState(() {
@@ -555,10 +645,12 @@ class _AyahsPageState extends State<AyahsPage>
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getInt(_kPrefMinId) ?? 1;
     final savedScale = prefs.getDouble(_kPrefFontScale) ?? 1.0;
+    final savedAnchorOffset = prefs.getDouble(_kPrefAnchorOffset) ?? 0.0;
     if (savedScale != _fontScale) {
       setState(() => _fontScale = savedScale.clamp(0.5, 3.0));
     }
-    debugPrint('[Init] Saved ayah id=$savedId fontScale=$savedScale');
+    debugPrint('[Init] Saved ayah id=$savedId fontScale=$savedScale '
+        'anchorOffset=${savedAnchorOffset.toStringAsFixed(1)}');
     try {
       // Look up the page of the saved ayah, and fetch the Basmala text once.
       final db = await _openDb();
@@ -662,11 +754,16 @@ class _AyahsPageState extends State<AyahsPage>
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (fromPage == 1 && savedPage == 1) {
-          // Already at the very top — no rough jump needed.
+        // Only skip pin when truly restoring to the very beginning
+        // (first ayah, no offset saved). Any non-trivial target still needs
+        // the full pinFrame path to land at the right position.
+        final isDefaultStart = savedId <= (_ayahs.isNotEmpty ? _ayahs.first.id : 1)
+            && savedAnchorOffset == 0.0;
+        if (fromPage == 1 && savedPage == 1 && isDefaultStart) {
+          // Already at the very top with nothing to restore — skip pin.
           _justNavigated = false;
           setState(() => _navigating = false);
-          debugPrint('[Init] Settled — at top, no pin needed');
+          debugPrint('[Init] Settled — at top, no pin needed (default start)');
         } else {
           // Target is pre-buffered near the middle of the list.
           // Rough jump brings it into cacheExtent; pinFrame corrects precisely.
@@ -674,8 +771,9 @@ class _AyahsPageState extends State<AyahsPage>
           final initMax = _scrollController.hasClients
               ? _scrollController.position.maxScrollExtent
               : 0.0;
-          debugPrint('[Init] Rough jump done — starting pinFrame');
-          _runPinFrame(60, initMax, 0);
+          debugPrint('[Init] Rough jump done — starting pinFrame '
+              'postOffset=${savedAnchorOffset.toStringAsFixed(1)}');
+          _runPinFrame(60, initMax, 0, postOffset: savedAnchorOffset);
         }
       });
     } catch (e) {
@@ -878,13 +976,21 @@ class _AyahsPageState extends State<AyahsPage>
   /// Frame-by-frame pin loop.  Calls ensureVisible each frame until the scroll
   /// position has been stable for 5 consecutive frames (layout fully settled).
   /// Falls back to _roughJumpToHighlight if the target widget is not yet built.
-  void _runPinFrame(int framesLeft, double prevMax, int stableCount) {
+  /// [postOffset] is only set for cold-resume: after the anchor lands at the
+  /// top of the viewport (alignment 0.0), we scroll back by postOffset so the
+  /// ayah appears at the same screen position it had when the user last left.
+  void _runPinFrame(int framesLeft, double prevMax, int stableCount,
+      {double postOffset = 0.0}) {
     final buildCtx = this.context; // capture before async gap
+    // Use alignment 0.0 when we have a postOffset (resume path); the final
+    // jumpTo will apply the saved local offset.  Normal navigation uses 0.25.
+    final alignment = postOffset != 0.0 ? 0.0 : 0.25;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _highlightKey?.currentContext;
       if (ctx != null) {
-        Scrollable.ensureVisible(ctx, alignment: 0.25, duration: Duration.zero);
+        Scrollable.ensureVisible(ctx,
+            alignment: alignment, duration: Duration.zero);
       } else {
         _roughJumpToHighlight(); // pull target into cacheExtent, try again next frame
       }
@@ -904,20 +1010,36 @@ class _AyahsPageState extends State<AyahsPage>
         final hlIdNow = _highlightId;
         final hlKeyNow = _highlightKey;
         if (hlIdNow != null) _lastKnownSaveId = hlIdNow;
+        if (postOffset != 0.0 && pos != null) {
+          // Apply the position offset BEFORE clearing _navigating so that
+          // _onScroll stays blocked during the jump (prevents loadPrev/More
+          // from firing mid-jump and shifting content).
+          final before = pos.pixels;
+          final corrected =
+              (pos.pixels - postOffset).clamp(0.0, pos.maxScrollExtent);
+          _scrollController.jumpTo(corrected);
+          debugPrint('[Nav-postSettle] resume offset applied '
+              '${before.toStringAsFixed(0)}→${corrected.toStringAsFixed(0)}');
+        }
         setState(() => _navigating = false);
         debugPrint(
             '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (!mounted || _navigating) return;
-          if (_userDragging) return;
-          final postCtx = hlKeyNow?.currentContext;
-          if (postCtx == null) return;
-          Scrollable.ensureVisible(postCtx,
-              alignment: 0.25, duration: Duration.zero);
-          debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
-        });
+        if (postOffset == 0.0) {
+          // Normal navigation: quiet re-pin 500ms later in case a late layout
+          // pass shifts the content slightly.
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (!mounted || _navigating) return;
+            if (_userDragging) return;
+            final postCtx = hlKeyNow?.currentContext;
+            if (postCtx == null) return;
+            Scrollable.ensureVisible(postCtx,
+                alignment: 0.25, duration: Duration.zero);
+            debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
+          });
+        }
       } else {
-        _runPinFrame(framesLeft - 1, currentMax, newStable);
+        _runPinFrame(framesLeft - 1, currentMax, newStable,
+            postOffset: postOffset);
       }
     });
   }
@@ -1328,12 +1450,20 @@ class _AyahsPageState extends State<AyahsPage>
             child: GestureDetector(
               onScaleStart: (_) {
                 if (!_isPinching) _baseFontScale = _fontScale;
+                _captureZoomAnchor();
               },
               onScaleUpdate: (d) {
                 if (_isPinching) {
                   setState(() {
                     _fontScale = (_baseFontScale * d.scale).clamp(0.5, 3.0);
                   });
+                  if (!_zoomRestorePending) {
+                    _zoomRestorePending = true;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _zoomRestorePending = false;
+                      if (mounted) _restoreZoomAnchor();
+                    });
+                  }
                 }
               },
               onScaleEnd: (_) {}, // managed by Listener
@@ -1463,17 +1593,16 @@ class _AyahsPageState extends State<AyahsPage>
                       final hasHighlight = _highlightId != null &&
                           item.ayahs.any((a) => a.id == _highlightId);
 
+                      final Widget richText;
                       if (hasHighlight) {
-                        // Keep all ayahs in one RichText so the text flows
-                        // continuously (no paragraph break before the highlight).
-                        // A zero-size WidgetSpan anchors _highlightKey at the
-                        // exact highlight position so ensureVisible(alignment:0.0)
-                        // scrolls precisely to that ayah without splitting the run.
+                        // Keep all ayahs in one RichText so text flows
+                        // continuously. A zero-size WidgetSpan anchors
+                        // _highlightKey at the exact highlight position.
                         final hlIdx =
                             item.ayahs.indexWhere((a) => a.id == _highlightId);
                         final before = item.ayahs.sublist(0, hlIdx);
                         final fromHl = item.ayahs.sublist(hlIdx);
-                        return RichText(
+                        richText = RichText(
                           textDirection: TextDirection.rtl,
                           textAlign: TextAlign.center,
                           text: TextSpan(
@@ -1487,18 +1616,22 @@ class _AyahsPageState extends State<AyahsPage>
                             ],
                           ),
                         );
+                      } else {
+                        richText = RichText(
+                          textDirection: TextDirection.rtl,
+                          textAlign: TextAlign.center,
+                          text: TextSpan(
+                            style: baseStyle,
+                            children:
+                                item.ayahs.map<InlineSpan>(ayahSpan).toList(),
+                          ),
+                        );
                       }
-
-                      // No highlight — single RichText with tappable spans.
-                      return RichText(
-                        textDirection: TextDirection.rtl,
-                        textAlign: TextAlign.center,
-                        text: TextSpan(
-                          style: baseStyle,
-                          children:
-                              item.ayahs.map<InlineSpan>(ayahSpan).toList(),
-                        ),
-                      );
+                      // Wrap with a keyed widget so _runKeyCache can measure
+                      // this run's position for save/restore.
+                      final runKey = _runKeyCache.putIfAbsent(
+                          item.ayahs.first.id, GlobalKey.new);
+                      return KeyedSubtree(key: runKey, child: richText);
                     }
 
                     return const SizedBox.shrink();
@@ -1922,13 +2055,14 @@ class _NavSheet extends StatefulWidget {
 }
 
 class _NavSheetState extends State<_NavSheet> {
-  int _mode = 0; // 0=page  1=surah  2=ayah
+  int _mode = 1; // 0=page  1=surah  2=ayah  — default: surah
   List<SurahInfo> _surahs = [];
   bool _loadingSurahs = true;
   int _selectedSurahNo = 1;
 
   final _pageCtrl = TextEditingController();
   final _ayaNoCtrl = TextEditingController();
+  final _pageFocus = FocusNode();
 
   @override
   void initState() {
@@ -1940,6 +2074,7 @@ class _NavSheetState extends State<_NavSheet> {
   void dispose() {
     _pageCtrl.dispose();
     _ayaNoCtrl.dispose();
+    _pageFocus.dispose();
     super.dispose();
   }
 
@@ -2030,7 +2165,14 @@ class _NavSheetState extends State<_NavSheet> {
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: GestureDetector(
-                    onTap: () => setState(() => _mode = i),
+                    onTap: () {
+                      if (_mode == 0 && i != 0) _pageFocus.unfocus();
+                      setState(() => _mode = i);
+                      if (i == 0) {
+                        WidgetsBinding.instance.addPostFrameCallback(
+                            (_) => _pageFocus.requestFocus());
+                      }
+                    },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 22, vertical: 9),
@@ -2069,6 +2211,7 @@ class _NavSheetState extends State<_NavSheet> {
                   Expanded(
                     child: TextField(
                       controller: _pageCtrl,
+                      focusNode: _pageFocus,
                       keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
                       style: labelStyle,

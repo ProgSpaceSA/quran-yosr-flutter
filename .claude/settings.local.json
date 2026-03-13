@@ -36,7 +36,8 @@
       "Bash(xcodebuild -version)",
       "Bash(git add pubspec.yaml codemagic.yaml)",
       "Bash(git commit -m \"Bump build number to 2\")",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(flutter attach -d R5CY10APEAV)"
     ]
   }
 }
