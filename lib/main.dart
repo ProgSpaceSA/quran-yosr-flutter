@@ -233,7 +233,7 @@ class AyahsPage extends StatefulWidget {
 }
 
 class _AyahsPageState extends State<AyahsPage>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final List<Ayah> _ayahs = [];
   List<_Item> _items = [];
   final ScrollController _scrollController = ScrollController();
@@ -261,7 +261,7 @@ class _AyahsPageState extends State<AyahsPage>
   bool _userDragging = false; // true while finger is actively dragging
   bool _isPinching = false; // true during 2-finger pinch-to-zoom
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
-  double _zoomAnchorOffset = 0.0; // scroll pixels at pinch start (for proportional restore)
+  double _zoomAnchorRawPixels = 0.0; // scroll pixels at pinch start (for proportional restore)
   bool _zoomRestorePending = false; // only one postFrameCallback queued at a time
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
@@ -457,22 +457,52 @@ class _AyahsPageState extends State<AyahsPage>
     }
   }
 
-  /// Records scroll position + scale at pinch start.
-  void _captureZoomAnchor() {
+  // ── Shared top-inset: every "place at top" call uses this margin. ──────────
+  static const double _kTopInset = 24.0;
+
+
+  /// Unified placement helper.  Scrolls so [key]'s widget top sits at
+  /// [offsetFromTop] pixels below the viewport top (negative = above top).
+  /// Uses [_kTopInset] by default.
+  void _placeItemAtTop(GlobalKey key, {double offsetFromTop = _kTopInset}) {
+    final ctx = key.currentContext;
+    if (ctx == null) return;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
     if (!_scrollController.hasClients) return;
-    _zoomAnchorOffset = _scrollController.position.pixels; // reuse field as startPixels
-    // _zoomAnchorRunId reused as start-scale * 1000 (int) for storage without new field
+    final pos = _scrollController.position;
+    final reveal =
+        RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
+    final target = (reveal - offsetFromTop).clamp(0.0, pos.maxScrollExtent);
+    debugPrint('[PlaceAtTop] offset=${offsetFromTop.toStringAsFixed(1)} '
+        'reveal=${reveal.toStringAsFixed(0)} → ${target.toStringAsFixed(0)}');
+    _scrollController.jumpTo(target);
   }
 
-  /// After each scale-change rebuild, scale pixels proportionally so the
-  /// same document position stays in view. Content height scales linearly
-  /// with _fontScale, so targetPixels = startPixels × (newScale / startScale).
+  /// Captures the top-viewport anchor at pinch start (run-based + raw-pixel fallback).
+  /// Captures raw scroll pixels at pinch start.  Run-based anchoring is
+  /// unreliable for zoom because the anchor run may be far above the viewport
+  /// (outside ListView's live layout range), giving stale revealOffset values.
+  /// Proportional pixel scaling is algebraically equivalent for uniform content
+  /// and is always reliable.
+  void _captureZoomAnchor() {
+    if (_scrollController.hasClients) {
+      _zoomAnchorRawPixels = _scrollController.position.pixels;
+    }
+  }
+
+  /// Restores viewport top content after a scale change by scaling the
+  /// start-pixels proportionally: content height scales linearly with
+  /// _fontScale, so startPixels × (newScale/startScale) gives the correct
+  /// scroll position for the same document top.
   void _restoreZoomAnchor() {
     if (!_isPinching || !_scrollController.hasClients) return;
     if (_baseFontScale == 0) return;
     final pos = _scrollController.position;
-    final target = (_zoomAnchorOffset * (_fontScale / _baseFontScale))
+    final target = (_zoomAnchorRawPixels * (_fontScale / _baseFontScale))
         .clamp(0.0, pos.maxScrollExtent);
+    debugPrint('[ZoomRestore] px=${_zoomAnchorRawPixels.toStringAsFixed(0)} '
+        'ratio=${(_fontScale/_baseFontScale).toStringAsFixed(2)} → ${target.toStringAsFixed(0)}');
     _scrollController.jumpTo(target);
   }
 
@@ -481,18 +511,17 @@ class _AyahsPageState extends State<AyahsPage>
     _doSaveReadingPosition();
   }
 
-  /// Scans all visible _AyahRun widgets via _runKeyCache, picks the one
-  /// closest to mid-viewport, and saves anchor id + top offset to prefs.
+  /// Scans visible _AyahRun widgets, picks the one that owns the viewport top
+  /// (top-edge at or just above y=0), and saves anchor id + topOnScreen to prefs.
   void _doSaveReadingPosition() {
     if (!mounted || !_scrollController.hasClients) return;
     final pos = _scrollController.position;
     final viewportH = pos.viewportDimension;
 
-    double bestOffset = viewportH / 2; // fallback: mid-screen
-    int bestAnchorId =
-        _lastKnownSaveId > 0 ? _lastKnownSaveId : (_ayahs.isNotEmpty ? _ayahs.first.id : 0);
-    bool measured = false;
-    double bestDist = double.infinity;
+    // Primary: run whose top is ≤ 0 and extends into viewport (owns viewport top).
+    // Fallback: first run fully below viewport top.
+    double primTop = double.negativeInfinity; int primId = 0;
+    double fallTop = double.infinity;         int fallId = 0;
 
     for (final entry in _runKeyCache.entries) {
       final ctx = entry.value.currentContext;
@@ -500,30 +529,31 @@ class _AyahsPageState extends State<AyahsPage>
       final box = ctx.findRenderObject() as RenderBox?;
       if (box == null || !box.hasSize) continue;
       try {
-        final revealOffset =
+        final reveal =
             RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
-        final topOnScreen = revealOffset - pos.pixels;
+        final top = reveal - pos.pixels;
         final h = box.size.height;
-        // Only consider runs overlapping the viewport.
-        if (topOnScreen < viewportH && topOnScreen + h > 0) {
-          final dist = ((topOnScreen + h / 2) - viewportH / 2).abs();
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestOffset = topOnScreen;
-            bestAnchorId = entry.key;
-            measured = true;
-          }
+        if (top < viewportH && top + h > 0) { // visible
+          if (top <= 0 && top > primTop) { primTop = top; primId = entry.key; }
+          if (top > 0 && top < fallTop)  { fallTop = top; fallId = entry.key; }
         }
       } catch (_) {}
     }
 
-    _lastKnownSaveId = bestAnchorId;
+    final anchorId = primId != 0 ? primId
+        : (fallId != 0 ? fallId
+        : (_lastKnownSaveId > 0 ? _lastKnownSaveId
+        : (_ayahs.isNotEmpty ? _ayahs.first.id : 0)));
+    final anchorOffset = primId != 0 ? primTop : (fallId != 0 ? fallTop : 0.0);
+    final measured = primId != 0 || fallId != 0;
+
+    _lastKnownSaveId = anchorId;
     debugPrint('[Save] anchor=$_lastKnownSaveId '
-        'localOffset=${bestOffset.toStringAsFixed(1)} scale=$_fontScale '
+        'topOffset=${anchorOffset.toStringAsFixed(1)} scale=$_fontScale '
         'measured=$measured');
     SharedPreferences.getInstance().then((p) {
       p.setInt(_kPrefMinId, _lastKnownSaveId);
-      p.setDouble(_kPrefAnchorOffset, bestOffset);
+      p.setDouble(_kPrefAnchorOffset, anchorOffset);
       p.setDouble(_kPrefFontScale, _fontScale);
     });
   }
@@ -973,24 +1003,20 @@ class _AyahsPageState extends State<AyahsPage>
         .jumpTo((frac * pos.maxScrollExtent).clamp(0.0, pos.maxScrollExtent));
   }
 
-  /// Frame-by-frame pin loop.  Calls ensureVisible each frame until the scroll
-  /// position has been stable for 5 consecutive frames (layout fully settled).
-  /// Falls back to _roughJumpToHighlight if the target widget is not yet built.
-  /// [postOffset] is only set for cold-resume: after the anchor lands at the
-  /// top of the viewport (alignment 0.0), we scroll back by postOffset so the
-  /// ayah appears at the same screen position it had when the user last left.
+  /// Frame-by-frame pin loop.  Places the highlight widget at [postOffset]
+  /// below the viewport top each frame until layout has been stable for 5
+  /// consecutive frames.  Falls back to _roughJumpToHighlight while the
+  /// target widget is not yet built.
+  /// [postOffset] defaults to [_kTopInset] (navigation) or the saved
+  /// topOnScreen value (cold-resume).
   void _runPinFrame(int framesLeft, double prevMax, int stableCount,
-      {double postOffset = 0.0}) {
-    final buildCtx = this.context; // capture before async gap
-    // Use alignment 0.0 when we have a postOffset (resume path); the final
-    // jumpTo will apply the saved local offset.  Normal navigation uses 0.25.
-    final alignment = postOffset != 0.0 ? 0.0 : 0.25;
+      {double postOffset = _kTopInset}) {
+    final buildCtx = this.context;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final ctx = _highlightKey?.currentContext;
-      if (ctx != null) {
-        Scrollable.ensureVisible(ctx,
-            alignment: alignment, duration: Duration.zero);
+      final hlKey = _highlightKey;
+      if (hlKey?.currentContext != null) {
+        _placeItemAtTop(hlKey!, offsetFromTop: postOffset);
       } else {
         _roughJumpToHighlight(); // pull target into cacheExtent, try again next frame
       }
@@ -1004,39 +1030,26 @@ class _AyahsPageState extends State<AyahsPage>
           'Δ=${maxDelta.toStringAsFixed(1)} stable=$newStable '
           'kb=${kbHeight.toStringAsFixed(0)}');
       if ((kbHeight == 0 && newStable >= 5) || framesLeft <= 0) {
-        debugPrint('[Nav-ensureVisible] settled hl=$_highlightId '
+        debugPrint('[Nav-postSettle] settled hl=$_highlightId '
             'stable=$newStable timedOut=${framesLeft <= 0}');
         _justNavigated = false;
         final hlIdNow = _highlightId;
         final hlKeyNow = _highlightKey;
         if (hlIdNow != null) _lastKnownSaveId = hlIdNow;
-        if (postOffset != 0.0 && pos != null) {
-          // Apply the position offset BEFORE clearing _navigating so that
-          // _onScroll stays blocked during the jump (prevents loadPrev/More
-          // from firing mid-jump and shifting content).
-          final before = pos.pixels;
-          final corrected =
-              (pos.pixels - postOffset).clamp(0.0, pos.maxScrollExtent);
-          _scrollController.jumpTo(corrected);
-          debugPrint('[Nav-postSettle] resume offset applied '
-              '${before.toStringAsFixed(0)}→${corrected.toStringAsFixed(0)}');
+        // Final precise placement before dismissing the overlay.
+        if (hlKeyNow?.currentContext != null) {
+          _placeItemAtTop(hlKeyNow!, offsetFromTop: postOffset);
         }
         setState(() => _navigating = false);
-        debugPrint(
-            '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
-        if (postOffset == 0.0) {
-          // Normal navigation: quiet re-pin 500ms later in case a late layout
-          // pass shifts the content slightly.
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (!mounted || _navigating) return;
-            if (_userDragging) return;
-            final postCtx = hlKeyNow?.currentContext;
-            if (postCtx == null) return;
-            Scrollable.ensureVisible(postCtx,
-                alignment: 0.25, duration: Duration.zero);
-            debugPrint('[Nav-postSettle] quiet re-pin hl=$hlIdNow');
-          });
-        }
+        debugPrint('[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
+        // Safety re-pin 500ms later to absorb any late layout pass.
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!mounted || _navigating || _userDragging) return;
+          final postCtx = hlKeyNow?.currentContext;
+          if (postCtx == null) return;
+          _placeItemAtTop(hlKeyNow!, offsetFromTop: postOffset);
+          debugPrint('[Nav-postSettle] safety re-pin hl=$hlIdNow');
+        });
       } else {
         _runPinFrame(framesLeft - 1, currentMax, newStable,
             postOffset: postOffset);
