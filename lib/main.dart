@@ -13,8 +13,22 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
-void main() => runApp(const MyApp());
+/// Top-level handler for background/terminated FCM messages.
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  debugPrint('[FCM-bg] ${message.notification?.title}: ${message.notification?.body}');
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  runApp(const MyApp());
+}
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 
@@ -291,6 +305,13 @@ class _AyahsPageState extends State<AyahsPage>
   // Keys for each rendered _AyahRun, keyed by run's first ayah id.
   // Used to scan for visible runs at save time.
   final Map<int, GlobalKey> _runKeyCache = {};
+  // Keys for each rendered _PageMarker, keyed by marker's page number.
+  // Used to detect which page top is at the viewport top.
+  final Map<int, GlobalKey> _pageMarkerKeyCache = {};
+  final Map<int, GlobalKey> _surahHeaderKeyCache = {};
+  int? _navHeaderSuraNo; // when set, pin to surah header instead of first ayah
+  // First surah name seen on each Mushaf page (built from _ayahs).
+  final Map<int, String> _pageToSuraName = {};
   bool _justNavigated = false; // blocks auto _loadPrev right after navigation
   bool _navigating = false; // overlay shown during navigate + back-buffer load
   DateTime _prevCooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
@@ -459,7 +480,44 @@ class _AyahsPageState extends State<AyahsPage>
 
   // ── Shared top-inset: every "place at top" call uses this margin. ──────────
   static const double _kTopInset = 24.0;
+  /// Top offset that scales with zoom so the landed position feels consistent.
+  double get _navTopOffset => _kTopInset * _fontScale;
 
+
+  /// Scans _pageMarkerKeyCache to determine which Mushaf page top is currently
+  /// at the viewport top, then updates _currentSuraName / _currentJuz.
+  /// _PageMarker(N) sits at the N→N+1 page boundary, so when it has scrolled
+  /// above viewport top (topOnScreen ≤ 0) the visible page is N+1.
+  void _updateTitleBarFromViewport() {
+    if (!_scrollController.hasClients || _ayahs.isEmpty) return;
+    final pos = _scrollController.position;
+    // Find marker with the largest topOnScreen ≤ 0 (last one to scroll above top).
+    int primPage = 0; double primTop = double.negativeInfinity;
+    for (final entry in _pageMarkerKeyCache.entries) {
+      final ctx = entry.value.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      try {
+        final reveal =
+            RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
+        final top = reveal - pos.pixels;
+        if (top <= 0 && top > primTop) { primTop = top; primPage = entry.key; }
+      } catch (_) {}
+    }
+    // marker(N) above viewport → page N+1 is at top; no marker → first loaded page.
+    final currentPage =
+        primPage != 0 ? primPage + 1 : _ayahs.first.page;
+    final suraName =
+        _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
+    final juz = _pageToJuz(currentPage);
+    if (suraName != _currentSuraName || juz != _currentJuz) {
+      setState(() {
+        _currentSuraName = suraName;
+        _currentJuz = juz;
+      });
+    }
+  }
 
   /// Unified placement helper.  Scrolls so [key]'s widget top sits at
   /// [offsetFromTop] pixels below the viewport top (negative = above top).
@@ -617,15 +675,10 @@ class _AyahsPageState extends State<AyahsPage>
             'px=${pos.pixels.toStringAsFixed(0)}/${pos.maxScrollExtent.toStringAsFixed(0)})');
         SharedPreferences.getInstance()
             .then((p) => p.setInt(_kPrefMinId, saveId));
-        final juz = _pageToJuz(ayah.page);
-        if (ayah.suraNameAr != _currentSuraName || juz != _currentJuz) {
-          setState(() {
-            _currentSuraName = ayah.suraNameAr;
-            _currentJuz = juz;
-          });
-        }
       }
     }
+    // Update title bar based on which page top is at the viewport top.
+    _updateTitleBarFromViewport();
 
     if (!_loadingMore &&
         !_reachedBottom &&
@@ -637,7 +690,7 @@ class _AyahsPageState extends State<AyahsPage>
     // so a subsequent scroll back to the top will load the back-buffer normally.
     if (_justNavigated && pos.pixels > 800) _justNavigated = false;
 
-    if (!_loadingPrev && !_reachedTop && !_justNavigated && pos.pixels <= 400) {
+    if (!_loadingPrev && !_reachedTop && !_justNavigated && pos.pixels <= 600) {
       // Cooldown: prevents rapid re-firing while correctBy is still settling.
       final now = DateTime.now();
       if (now.isBefore(_prevCooldownUntil)) {
@@ -671,6 +724,23 @@ class _AyahsPageState extends State<AyahsPage>
         .toList();
   }
 
+  Future<void> _initFcm() async {
+    final messaging = FirebaseMessaging.instance;
+    await messaging.requestPermission();
+    final token = await messaging.getToken();
+    debugPrint('[FCM] device token: $token');
+    FirebaseMessaging.onMessage.listen((msg) {
+      final n = msg.notification;
+      if (n == null || !mounted) return;
+      final ctx = this.context;
+      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+        content: Text('${n.title ?? ''}\n${n.body ?? ''}'),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+      ));
+    });
+  }
+
   Future<void> _loadInitial() async {
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getInt(_kPrefMinId) ?? 1;
@@ -681,6 +751,7 @@ class _AyahsPageState extends State<AyahsPage>
     }
     debugPrint('[Init] Saved ayah id=$savedId fontScale=$savedScale '
         'anchorOffset=${savedAnchorOffset.toStringAsFixed(1)}');
+    _initFcm(); // fire-and-forget; runs in parallel with DB load
     try {
       // Look up the page of the saved ayah, and fetch the Basmala text once.
       final db = await _openDb();
@@ -760,6 +831,7 @@ class _AyahsPageState extends State<AyahsPage>
       // by correctBy's inaccurate estimated-height delta.
       final target =
           ayahs.firstWhere((a) => a.id >= savedId, orElse: () => ayahs.first);
+      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
       setState(() {
         _ayahs.addAll(ayahs);
         _recomputeItems();
@@ -823,6 +895,7 @@ class _AyahsPageState extends State<AyahsPage>
       final ayahs = await _fetch('id > ?', [_maxId], 'id ASC');
       debugPrint('[LoadMore] Got ${ayahs.length} ayahs'
           '${ayahs.isNotEmpty ? " (ids ${ayahs.first.id}–${ayahs.last.id})" : ""}');
+      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
       setState(() {
         _ayahs.addAll(ayahs);
         _recomputeItems();
@@ -853,9 +926,14 @@ class _AyahsPageState extends State<AyahsPage>
       }
       debugPrint('[LoadPrev] Got ${ayahs.length} ayahs '
           '(ids ${ayahs.first.id}–${ayahs.last.id})');
-      final oldMax = _scrollController.position.maxScrollExtent;
-      // Keep _loadingPrev = true through correctBy so _onScroll cannot
-      // re-trigger _loadPrev the instant items are inserted (cascade bug).
+      // Capture position BEFORE the async gap so we know where the user was.
+      final oldMax = _scrollController.hasClients
+          ? _scrollController.position.maxScrollExtent
+          : 0.0;
+      final oldPixels = _scrollController.hasClients
+          ? _scrollController.position.pixels
+          : 0.0;
+      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
       setState(() {
         _ayahs.insertAll(0, ayahs);
         _recomputeItems();
@@ -869,15 +947,20 @@ class _AyahsPageState extends State<AyahsPage>
           final newMax = pos.maxScrollExtent;
           final delta = newMax - oldMax;
           debugPrint(
-              '[LoadPrev-correctBy] BEFORE px=${pos.pixels.toStringAsFixed(0)} '
+              '[LoadPrev-correctBy] oldPx=${oldPixels.toStringAsFixed(0)} '
               'oldMax=${oldMax.toStringAsFixed(0)} '
               'newMax=${newMax.toStringAsFixed(0)} '
               'delta=${delta.toStringAsFixed(0)}');
           if (delta > 0) {
-            pos.correctBy(delta);
-            debugPrint(
-                '[LoadPrev-correctBy] AFTER  px=${pos.pixels.toStringAsFixed(0)} '
-                'max=${pos.maxScrollExtent.toStringAsFixed(0)}');
+            // If the user had already hit the hard top (pixels ≈ 0) by the
+            // time the DB returned, scroll to 0 so the new pages are
+            // immediately visible.  Otherwise keep the viewport locked on the
+            // same content (stable correction).
+            final target = oldPixels < 10.0
+                ? 0.0
+                : (oldPixels + delta).clamp(0.0, newMax);
+            _scrollController.jumpTo(target);
+            debugPrint('[LoadPrev-correctBy] → jumpTo=${target.toStringAsFixed(0)}');
           }
         }
         // One more frame to let the corrected position settle, THEN release.
@@ -900,6 +983,9 @@ class _AyahsPageState extends State<AyahsPage>
       _autoScrolling = false;
       _ayahs.clear();
       _items.clear();
+      _pageMarkerKeyCache.clear();
+      _surahHeaderKeyCache.clear();
+      _pageToSuraName.clear();
       _loadingMore = false;
       _loadingPrev = false;
       _reachedTop = false;
@@ -944,6 +1030,7 @@ class _AyahsPageState extends State<AyahsPage>
           '${ayahs.isNotEmpty ? " (ids ${ayahs.first.id}–${ayahs.last.id})" : ""}'
           ' — target id=$startId at list-idx=$targetIdx');
 
+      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
       _justNavigated = true;
       setState(() {
         _ayahs.addAll(ayahs);
@@ -975,7 +1062,7 @@ class _AyahsPageState extends State<AyahsPage>
             ? _scrollController.position.maxScrollExtent
             : 0.0;
         debugPrint('[Navigate] Rough jump done — starting pinFrame');
-        _runPinFrame(60, initMax, 0);
+        _runPinFrame(60, initMax, 0, postOffset: _navTopOffset);
       });
     } catch (e) {
       setState(() {
@@ -1015,8 +1102,13 @@ class _AyahsPageState extends State<AyahsPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final hlKey = _highlightKey;
-      if (hlKey?.currentContext != null) {
-        _placeItemAtTop(hlKey!, offsetFromTop: postOffset);
+      final headerKey = _navHeaderSuraNo != null
+          ? _surahHeaderKeyCache[_navHeaderSuraNo]
+          : null;
+      final pinKey =
+          (headerKey?.currentContext != null) ? headerKey : hlKey;
+      if (pinKey?.currentContext != null) {
+        _placeItemAtTop(pinKey!, offsetFromTop: postOffset);
       } else {
         _roughJumpToHighlight(); // pull target into cacheExtent, try again next frame
       }
@@ -1037,17 +1129,23 @@ class _AyahsPageState extends State<AyahsPage>
         final hlKeyNow = _highlightKey;
         if (hlIdNow != null) _lastKnownSaveId = hlIdNow;
         // Final precise placement before dismissing the overlay.
-        if (hlKeyNow?.currentContext != null) {
-          _placeItemAtTop(hlKeyNow!, offsetFromTop: postOffset);
+        final finalHeaderKey = _navHeaderSuraNo != null
+            ? _surahHeaderKeyCache[_navHeaderSuraNo]
+            : null;
+        final finalPinKey =
+            (finalHeaderKey?.currentContext != null) ? finalHeaderKey : hlKeyNow;
+        if (finalPinKey?.currentContext != null) {
+          _placeItemAtTop(finalPinKey!, offsetFromTop: postOffset);
         }
+        _navHeaderSuraNo = null;
         setState(() => _navigating = false);
         debugPrint('[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
-        // Safety re-pin 500ms later to absorb any late layout pass.
+        // Safety re-pin 500ms later — use captured pin key (header or ayah).
+        final safetyPinKey = finalPinKey;
         Future.delayed(const Duration(milliseconds: 500), () {
           if (!mounted || _navigating || _userDragging) return;
-          final postCtx = hlKeyNow?.currentContext;
-          if (postCtx == null) return;
-          _placeItemAtTop(hlKeyNow!, offsetFromTop: postOffset);
+          if (safetyPinKey?.currentContext == null) return;
+          _placeItemAtTop(safetyPinKey!, offsetFromTop: postOffset);
           debugPrint('[Nav-postSettle] safety re-pin hl=$hlIdNow');
         });
       } else {
@@ -1055,6 +1153,11 @@ class _AyahsPageState extends State<AyahsPage>
             postOffset: postOffset);
       }
     });
+  }
+
+  Future<void> _navigateToSurah(int suraNo, int firstAyahId) async {
+    _navHeaderSuraNo = suraNo;
+    await _navigateTo(firstAyahId);
   }
 
   void _openSearch() {
@@ -1241,6 +1344,10 @@ class _AyahsPageState extends State<AyahsPage>
         onNavigate: (startId) {
           Navigator.pop(ctx);
           _navigateTo(startId);
+        },
+        onNavigateToSurah: (suraNo, firstAyahId) {
+          Navigator.pop(ctx);
+          _navigateToSurah(suraNo, firstAyahId);
         },
       ),
     );
@@ -1508,28 +1615,33 @@ class _AyahsPageState extends State<AyahsPage>
 
                     // ── Surah header ──────────────────────────────────────
                     if (item is _SurahHeader) {
-                      return Container(
-                        margin: const EdgeInsets.symmetric(vertical: 12),
-                        color: headerBg,
-                        child: Column(
-                          children: [
-                            Divider(
-                                height: 1, thickness: 1, color: dividerColor),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              child: Text(
-                                'سورة ${item.suraNameAr}',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: headerTextColor,
+                      return KeyedSubtree(
+                        key: _surahHeaderKeyCache.putIfAbsent(
+                            item.suraNo, GlobalKey.new),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 12),
+                          color: headerBg,
+                          child: Column(
+                            children: [
+                              Divider(
+                                  height: 1, thickness: 1, color: dividerColor),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                                child: Text(
+                                  'سورة ${item.suraNameAr}',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: headerTextColor,
+                                  ),
                                 ),
                               ),
-                            ),
-                            Divider(
-                                height: 1, thickness: 1, color: dividerColor),
-                          ],
+                              Divider(
+                                  height: 1, thickness: 1, color: dividerColor),
+                            ],
+                          ),
                         ),
                       );
                     }
@@ -1554,29 +1666,35 @@ class _AyahsPageState extends State<AyahsPage>
 
                     // ── Page marker ───────────────────────────────────────
                     if (item is _PageMarker) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Row(
-                          children: [
-                            Expanded(
-                                child:
-                                    Divider(color: dividerColor, thickness: 1)),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 10),
-                              child: Text(
-                                '${item.page}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color:
-                                      isDark ? Colors.white38 : Colors.black38,
+                      final markerKey = _pageMarkerKeyCache.putIfAbsent(
+                          item.page, GlobalKey.new);
+                      return KeyedSubtree(
+                        key: markerKey,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                  child: Divider(
+                                      color: dividerColor, thickness: 1)),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10),
+                                child: Text(
+                                  '${item.page}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark
+                                        ? Colors.white38
+                                        : Colors.black38,
+                                  ),
                                 ),
                               ),
-                            ),
-                            Expanded(
-                                child:
-                                    Divider(color: dividerColor, thickness: 1)),
-                          ],
+                              Expanded(
+                                  child: Divider(
+                                      color: dividerColor, thickness: 1)),
+                            ],
+                          ),
                         ),
                       );
                     }
@@ -2061,7 +2179,8 @@ class _TutorialCard extends StatelessWidget {
 
 class _NavSheet extends StatefulWidget {
   final void Function(int startId) onNavigate;
-  const _NavSheet({required this.onNavigate});
+  final void Function(int suraNo, int firstAyahId) onNavigateToSurah;
+  const _NavSheet({required this.onNavigate, required this.onNavigateToSurah});
 
   @override
   State<_NavSheet> createState() => _NavSheetState();
@@ -2075,19 +2194,26 @@ class _NavSheetState extends State<_NavSheet> {
 
   final _pageCtrl = TextEditingController();
   final _ayaNoCtrl = TextEditingController();
+  final _surahSearchCtrl = TextEditingController();
   final _pageFocus = FocusNode();
+  final _surahSearchFocus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _loadSurahs();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _mode == 1) _surahSearchFocus.requestFocus();
+    });
   }
 
   @override
   void dispose() {
     _pageCtrl.dispose();
     _ayaNoCtrl.dispose();
+    _surahSearchCtrl.dispose();
     _pageFocus.dispose();
+    _surahSearchFocus.dispose();
     super.dispose();
   }
 
@@ -2110,6 +2236,28 @@ class _NavSheetState extends State<_NavSheet> {
     });
   }
 
+  static String _normalizeAr(String s) =>
+      s.replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '');
+
+  bool _surahMatches(String name, String q) {
+    if (q.isEmpty) return true;
+    final n = _normalizeAr(name);
+    final qq = _normalizeAr(q);
+    if (n.contains(qq)) return true;
+    // subsequence match (loose)
+    int qi = 0;
+    for (int ci = 0; ci < n.length && qi < qq.length; ci++) {
+      if (n[ci] == qq[qi]) qi++;
+    }
+    return qi == qq.length;
+  }
+
+  List<SurahInfo> get _filteredSurahs {
+    final q = _surahSearchCtrl.text.trim();
+    if (q.isEmpty) return _surahs;
+    return _surahs.where((s) => _surahMatches(s.nameAr, q)).toList();
+  }
+
   Future<void> _goToPage() async {
     final page = int.tryParse(_pageCtrl.text.trim());
     if (page == null || page < 1 || page > 604) return;
@@ -2129,7 +2277,8 @@ class _NavSheetState extends State<_NavSheet> {
       [suraNo],
     );
     await db.close();
-    if (rows.isNotEmpty) widget.onNavigate(rows.first['id'] as int);
+    if (rows.isNotEmpty)
+      widget.onNavigateToSurah(suraNo, rows.first['id'] as int);
   }
 
   Future<void> _goToAyah() async {
@@ -2184,6 +2333,9 @@ class _NavSheetState extends State<_NavSheet> {
                       if (i == 0) {
                         WidgetsBinding.instance.addPostFrameCallback(
                             (_) => _pageFocus.requestFocus());
+                      } else if (i == 1) {
+                        WidgetsBinding.instance.addPostFrameCallback(
+                            (_) => _surahSearchFocus.requestFocus());
                       }
                     },
                     child: Container(
@@ -2261,32 +2413,68 @@ class _NavSheetState extends State<_NavSheet> {
                 ? const Padding(
                     padding: EdgeInsets.all(24),
                     child: CircularProgressIndicator())
-                : SizedBox(
-                    height: 300,
-                    child: ListView.builder(
-                      itemCount: _surahs.length,
-                      itemBuilder: (ctx, i) {
-                        final s = _surahs[i];
-                        return ListTile(
-                          dense: true,
-                          leading: Text('${s.no}',
-                              style: TextStyle(
-                                  color:
-                                      isDark ? Colors.white38 : Colors.black38,
-                                  fontSize: 12)),
-                          title: Text(s.nameAr,
-                              style: TextStyle(
-                                  color:
-                                      isDark ? Colors.white : Colors.black87)),
-                          trailing: Text('${s.ayaCount} آية',
-                              style: TextStyle(
-                                  color:
-                                      isDark ? Colors.white38 : Colors.black38,
-                                  fontSize: 12)),
-                          onTap: () => _goToSurah(s.no),
-                        );
-                      },
-                    ),
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                        child: TextField(
+                          controller: _surahSearchCtrl,
+                          focusNode: _surahSearchFocus,
+                          textDirection: TextDirection.rtl,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            hintText: 'ابحث عن سورة...',
+                            hintStyle: TextStyle(
+                                color: isDark
+                                    ? Colors.white38
+                                    : Colors.black38),
+                            prefixIcon: const Icon(Icons.search),
+                            border: const OutlineInputBorder(),
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        height: 260,
+                        child: _filteredSurahs.isEmpty
+                            ? Center(
+                                child: Text('لا نتائج',
+                                    style: TextStyle(
+                                        color: isDark
+                                            ? Colors.white38
+                                            : Colors.black38)))
+                            : ListView.builder(
+                                itemCount: _filteredSurahs.length,
+                                itemBuilder: (ctx, i) {
+                                  final s = _filteredSurahs[i];
+                                  return ListTile(
+                                    dense: true,
+                                    leading: Text('${s.no}',
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white38
+                                                : Colors.black38,
+                                            fontSize: 12)),
+                                    title: Text(s.nameAr,
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black87)),
+                                    trailing: Text('${s.ayaCount} آية',
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white38
+                                                : Colors.black38,
+                                            fontSize: 12)),
+                                    onTap: () => _goToSurah(s.no),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
                   ),
           // ── Ayah mode ─────────────────────────────────────────────────
           if (_mode == 2)

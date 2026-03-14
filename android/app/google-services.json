@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "55581231516",
+    "project_id": "quranyosrapp",
+    "storage_bucket": "quranyosrapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:55581231516:android:5d6b0fad51d7813881e059",
+        "android_client_info": {
+          "package_name": "com.quranyosr.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDzCKVxdp-cngBwm1YJ_mZO5bxazhtMfcE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
