@@ -3,7 +3,6 @@ import 'package:flutter/scheduler.dart' show Ticker;
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
-import 'package:flutter/gestures.dart' show TapGestureRecognizer;
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1711,58 +1710,46 @@ class _AyahsPageState extends State<AyahsPage>
                           ? const Color(0xFFFFD54F) // amber 300
                           : const Color(0xFFF57F17); // amber 900
 
-                      // Helper: build a tappable TextSpan for one ayah.
-                      TextSpan ayahSpan(Ayah a) => TextSpan(
-                            text: '${a.ayaText} ',
-                            recognizer: TapGestureRecognizer()
-                              ..onTap = () => _onTapAyah(a.id),
-                            style: a.id == _highlightId
-                                ? TextStyle(color: hlColor)
-                                : null,
-                          );
-
-                      final hasHighlight = _highlightId != null &&
-                          item.ayahs.any((a) => a.id == _highlightId);
-
-                      final Widget richText;
-                      if (hasHighlight) {
-                        // Keep all ayahs in one RichText so text flows
-                        // continuously. A zero-size WidgetSpan anchors
-                        // _highlightKey at the exact highlight position.
-                        final hlIdx =
-                            item.ayahs.indexWhere((a) => a.id == _highlightId);
-                        final before = item.ayahs.sublist(0, hlIdx);
-                        final fromHl = item.ayahs.sublist(hlIdx);
-                        richText = RichText(
-                          textDirection: TextDirection.rtl,
-                          textAlign: TextAlign.center,
-                          text: TextSpan(
-                            style: baseStyle,
-                            children: <InlineSpan>[
-                              ...before.map<InlineSpan>(ayahSpan),
-                              WidgetSpan(
-                                child: SizedBox.shrink(key: _highlightKey),
+                      // Flatten all ayahs into one Wrap so words flow across
+                      // ayah boundaries naturally. Each word is a separate
+                      // RichText to isolate HarfBuzz shaping contexts and
+                      // prevent cross-word GSUB reordering (e.g. يعرفون+كلا).
+                      final wordWidgets = <Widget>[];
+                      for (final a in item.ayahs) {
+                        final isHl = a.id == _highlightId;
+                        final words = a.ayaText
+                            .split(' ')
+                            .where((w) => w.isNotEmpty)
+                            .toList();
+                        for (int i = 0; i < words.length; i++) {
+                          Widget w = RichText(
+                            textDirection: TextDirection.rtl,
+                            text: TextSpan(
+                              style: baseStyle.copyWith(
+                                color: isHl ? hlColor : null,
                               ),
-                              ...fromHl.map<InlineSpan>(ayahSpan),
-                            ],
-                          ),
-                        );
-                      } else {
-                        richText = RichText(
-                          textDirection: TextDirection.rtl,
-                          textAlign: TextAlign.center,
-                          text: TextSpan(
-                            style: baseStyle,
-                            children:
-                                item.ayahs.map<InlineSpan>(ayahSpan).toList(),
-                          ),
-                        );
+                              text: '${words[i]} ',
+                            ),
+                          );
+                          if (isHl && i == 0 && _highlightKey != null) {
+                            w = KeyedSubtree(key: _highlightKey!, child: w);
+                          }
+                          wordWidgets.add(GestureDetector(
+                            onTap: () => _onTapAyah(a.id),
+                            child: w,
+                          ));
+                        }
                       }
-                      // Wrap with a keyed widget so _runKeyCache can measure
-                      // this run's position for save/restore.
                       final runKey = _runKeyCache.putIfAbsent(
                           item.ayahs.first.id, GlobalKey.new);
-                      return KeyedSubtree(key: runKey, child: richText);
+                      return KeyedSubtree(
+                        key: runKey,
+                        child: Wrap(
+                          textDirection: TextDirection.rtl,
+                          alignment: WrapAlignment.center,
+                          children: wordWidgets,
+                        ),
+                      );
                     }
 
                     return const SizedBox.shrink();
