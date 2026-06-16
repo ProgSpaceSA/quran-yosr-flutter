@@ -37,7 +37,12 @@
       "Bash(git add pubspec.yaml codemagic.yaml)",
       "Bash(git commit -m \"Bump build number to 2\")",
       "Bash(git push)",
-      "Bash(flutter attach -d R5CY10APEAV)"
+      "Bash(flutter attach -d R5CY10APEAV)",
+      "Bash(emulator -avd Medium_Phone_API_36 -no-snapshot-load)",
+      "Bash(emulator -list-avds)",
+      "Bash(emulator -avd Medium_Phone_API_34 -no-snapshot-load)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
