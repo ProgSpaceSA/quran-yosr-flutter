@@ -595,16 +595,23 @@ class _AyahsPageState extends State<AyahsPage>
     final anchorOffset = primId != 0 ? primTop : (fallId != 0 ? fallTop : 0.0);
     final measured = primId != 0 || fallId != 0;
 
-    _lastKnownSaveId = anchorId;
-    _lastKnownAnchorOffset = anchorOffset;
+    // Only update the cache when we actually measured something.  If no run
+    // was in the render tree (e.g. called right after a navigation clear),
+    // keep the last known values so dispose() doesn't write anchorOffset=0.0.
+    if (measured) {
+      _lastKnownSaveId = anchorId;
+      _lastKnownAnchorOffset = anchorOffset;
+    }
     debugPrint('[Save] anchor=$_lastKnownSaveId '
-        'topOffset=${anchorOffset.toStringAsFixed(1)} scale=$_fontScale '
+        'topOffset=${_lastKnownAnchorOffset.toStringAsFixed(1)} scale=$_fontScale '
         'measured=$measured');
-    SharedPreferences.getInstance().then((p) {
-      p.setInt(_kPrefMinId, _lastKnownSaveId);
-      p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
-      p.setDouble(_kPrefFontScale, _fontScale);
-    });
+    if (_lastKnownSaveId > 0) {
+      SharedPreferences.getInstance().then((p) {
+        p.setInt(_kPrefMinId, _lastKnownSaveId);
+        p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
+        p.setDouble(_kPrefFontScale, _fontScale);
+      });
+    }
   }
 
   @override
