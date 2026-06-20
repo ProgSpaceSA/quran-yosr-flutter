@@ -61,6 +61,22 @@ class _MyAppState extends State<MyApp> {
   bool _isDark = true;
   bool _splashDone = false;
 
+  static const _kPrefIsDark = 'is_dark';
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) {
+      if (!mounted) return;
+      setState(() => _isDark = p.getBool(_kPrefIsDark) ?? true);
+    });
+  }
+
+  void _toggleTheme() {
+    setState(() => _isDark = !_isDark);
+    SharedPreferences.getInstance().then((p) => p.setBool(_kPrefIsDark, _isDark));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Directionality(
@@ -73,7 +89,7 @@ class _MyAppState extends State<MyApp> {
         home: _splashDone
             ? AyahsPage(
                 isDark: _isDark,
-                onToggleTheme: () => setState(() => _isDark = !_isDark),
+                onToggleTheme: _toggleTheme,
               )
             : _SplashScreen(onDone: () => setState(() => _splashDone = true)),
       ),
@@ -278,6 +294,7 @@ class _AyahsPageState extends State<AyahsPage>
   bool _zoomRestorePending = false; // only one postFrameCallback queued at a time
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
+  Timer? _saveDebounce;
   bool _showTutorial = false; // true on first launch
   int _speedLevel = 1; // 0 = slowest … 9 = fastest
   Ticker? _autoScrollTicker;
@@ -299,8 +316,8 @@ class _AyahsPageState extends State<AyahsPage>
   static const _kPrefMinId = 'last_min_id';
   static const _kPrefFontScale = 'font_scale';
   static const _kPrefAnchorOffset = 'anchor_offset';
-  int _lastKnownSaveId =
-      0; // cached so dispose() can write without a scroll controller
+  int _lastKnownSaveId = 0; // cached so dispose() can write without a scroll controller
+  double _lastKnownAnchorOffset = 0.0; // cached alongside saveId for dispose()
   // Keys for each rendered _AyahRun, keyed by run's first ayah id.
   // Used to scan for visible runs at save time.
   final Map<int, GlobalKey> _runKeyCache = {};
@@ -314,9 +331,6 @@ class _AyahsPageState extends State<AyahsPage>
   bool _justNavigated = false; // blocks auto _loadPrev right after navigation
   bool _navigating = false; // overlay shown during navigate + back-buffer load
   DateTime _prevCooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
-
-  // Diagnostic 100ms sampler — runs forever; helps trace the scroll-jump bug.
-  Timer? _diagTimer;
 
   // Title-bar state — updated on every visible-ayah change.
   String _currentSuraName = '';
@@ -426,34 +440,6 @@ class _AyahsPageState extends State<AyahsPage>
     _loadInitial();
     _scrollController.addListener(_onScroll);
 
-    // ── 100ms diagnostic sampler ──────────────────────────────────────────
-    // Prints the "middle" ayah id (by pixel fraction) every 100ms so we can
-    // see exactly what happens to the scroll position during and after
-    // navigation — in particular whether correctBy fires correctly and
-    // whether any subsequent event causes a jump.
-    double prevMax = 0;
-    _diagTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (!mounted || !_scrollController.hasClients) return;
-      final pos = _scrollController.position;
-      if (_ayahs.isEmpty || pos.maxScrollExtent <= 0) return;
-      final px = pos.pixels;
-      final mx = pos.maxScrollExtent;
-      final frac = (px / mx).clamp(0.0, 1.0);
-      final idx = (frac * (_ayahs.length - 1)).round();
-      final mid = _ayahs[idx];
-      // Detect unexpected max changes (not from a correctBy we just fired).
-      if (prevMax > 0 && (mx - prevMax).abs() > 5) {
-        debugPrint(
-            '[100ms-JUMP] max changed ${prevMax.toStringAsFixed(0)}→${mx.toStringAsFixed(0)} '
-            '(+${(mx - prevMax).toStringAsFixed(0)}) px=${px.toStringAsFixed(0)} '
-            'lp=$_loadingPrev lm=$_loadingMore nav=$_navigating');
-      }
-      prevMax = mx;
-      debugPrint('[100ms] px=${px.toStringAsFixed(0)}/${mx.toStringAsFixed(0)} '
-          'frac=${frac.toStringAsFixed(3)} midId=${mid.id} '
-          'hl=$_highlightId nav=$_navigating jn=$_justNavigated '
-          'lp=$_loadingPrev lm=$_loadingMore');
-    });
   }
 
   @override
@@ -568,6 +554,11 @@ class _AyahsPageState extends State<AyahsPage>
     _doSaveReadingPosition();
   }
 
+  void _debounceSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 1500), _doSaveReadingPosition);
+  }
+
   /// Scans visible _AyahRun widgets, picks the one that owns the viewport top
   /// (top-edge at or just above y=0), and saves anchor id + topOnScreen to prefs.
   void _doSaveReadingPosition() {
@@ -605,12 +596,13 @@ class _AyahsPageState extends State<AyahsPage>
     final measured = primId != 0 || fallId != 0;
 
     _lastKnownSaveId = anchorId;
+    _lastKnownAnchorOffset = anchorOffset;
     debugPrint('[Save] anchor=$_lastKnownSaveId '
         'topOffset=${anchorOffset.toStringAsFixed(1)} scale=$_fontScale '
         'measured=$measured');
     SharedPreferences.getInstance().then((p) {
       p.setInt(_kPrefMinId, _lastKnownSaveId);
-      p.setDouble(_kPrefAnchorOffset, anchorOffset);
+      p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
       p.setDouble(_kPrefFontScale, _fontScale);
     });
   }
@@ -620,13 +612,14 @@ class _AyahsPageState extends State<AyahsPage>
     WidgetsBinding.instance.removeObserver(this);
     debugPrint('[Dispose] dispose — saving lastKnownSaveId=$_lastKnownSaveId');
     WakelockPlus.disable();
-    _diagTimer?.cancel();
+    _saveDebounce?.cancel();
     _zoomBadgeTimer?.cancel();
     _autoScrollTicker?.dispose();
     // Use cached ID — scroll controller has no clients by the time dispose() runs.
     if (_lastKnownSaveId > 0) {
       SharedPreferences.getInstance().then((p) {
         p.setInt(_kPrefMinId, _lastKnownSaveId);
+        p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
         p.setDouble(_kPrefFontScale, _fontScale);
       });
     }
@@ -655,26 +648,10 @@ class _AyahsPageState extends State<AyahsPage>
 
     final pos = _scrollController.position;
 
-    // Track position — but only while the list is stable.
-    // During prepend/append and scroll corrections the fraction-based index
-    // drifts (list length changes), so saving it would persist a wrong position.
-    if (!_loadingPrev &&
-        !_loadingMore &&
-        _ayahs.isNotEmpty &&
-        pos.maxScrollExtent > 0) {
-      final fraction = (pos.pixels / pos.maxScrollExtent).clamp(0.0, 1.0);
-      final idx = (fraction * (_ayahs.length - 1)).round();
-      final ayah = _ayahs[idx];
-      final saveId = ayah.id;
-      if (saveId != _lastKnownSaveId) {
-        _lastKnownSaveId = saveId;
-        debugPrint('[Scroll] Position → ayah id=$saveId '
-            '(idx=$idx/${_ayahs.length - 1}, '
-            'frac=${fraction.toStringAsFixed(3)}, '
-            'px=${pos.pixels.toStringAsFixed(0)}/${pos.maxScrollExtent.toStringAsFixed(0)})');
-        SharedPreferences.getInstance()
-            .then((p) => p.setInt(_kPrefMinId, saveId));
-      }
+    // Debounce a precise key-based save so _kPrefMinId and _kPrefAnchorOffset
+    // are always written together from the same snapshot.
+    if (!_loadingPrev && !_loadingMore && _ayahs.isNotEmpty) {
+      _debounceSave();
     }
     // Update title bar based on which page top is at the viewport top.
     _updateTitleBarFromViewport();
@@ -982,6 +959,7 @@ class _AyahsPageState extends State<AyahsPage>
       _autoScrolling = false;
       _ayahs.clear();
       _items.clear();
+      _runKeyCache.clear();
       _pageMarkerKeyCache.clear();
       _surahHeaderKeyCache.clear();
       _pageToSuraName.clear();
