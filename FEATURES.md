@@ -22,7 +22,7 @@
 
 | Phase | Status |
 |---|---|
-| Phase 1 — Stability and Reading Core | 🔄 Nearly done *(juz navigation missing)* |
+| Phase 1 — Stability and Reading Core | ✅ Done |
 | Phase 2 — Daily Wird and Habit System | ⬜ Not started |
 | Phase 3 — Organization | ⬜ Not started |
 | Phase 4 — Memorization | ⬜ Not started |
@@ -126,14 +126,14 @@ Surah Al-Baqarah, Ayah 120
 
 ---
 
-## 4.3 Surah / Juz / Page Switching Optimization — 🔄 Partial
+## 4.3 Surah / Juz / Page Switching Optimization — ✅ Done
 
 Improve navigation speed and reliability.
 
 ### Requirements
 
 - [x] Fast switching between surahs.
-- [~] Fast switching between juz. *(juz shown in title bar; no dedicated juz-list navigation sheet)*
+- [x] Fast switching between juz.
 - [x] Fast page navigation if Mushaf page mode is enabled.
 - [x] Avoid blank loading delays.
 - [x] Avoid scroll reset bugs.
@@ -920,13 +920,13 @@ Features:
 
 ---
 
-## 12.4 Juz List Screen — ⬜ Not started
+## 12.4 Juz List Screen — ✅ Done
 
 Features:
 
-- [ ] Show juz list
-- [ ] Open juz
-- [ ] Continue from last ayah inside juz
+- [x] Show juz list
+- [x] Open juz
+- [ ] Continue from last ayah inside juz *(future: requires per-juz saved position)*
 
 ---
 
@@ -1086,11 +1086,11 @@ Even if sync is not implemented now, local entities should use stable IDs and ti
 
 # 15. Development Phases
 
-## Phase 1 - Stability and Reading Core — 🔄 Mostly done
+## Phase 1 - Stability and Reading Core — ✅ Done
 
 - [x] Fix reading-position management
 - [x] Resume exact ayah/page
-- [~] Improve surah/juz/page switching *(surah and page done; juz list navigation missing)*
+- [x] Improve surah/juz/page switching
 - [x] Improve page loading performance
 - [x] Add font size controller
 - [x] Improve dark mode
