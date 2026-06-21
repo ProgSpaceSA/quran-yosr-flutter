@@ -46,6 +46,27 @@ ThemeData _buildTheme(Brightness brightness) {
       surfaceTintColor: Colors.transparent,
     ),
     dividerColor: isDark ? Colors.white24 : Colors.black12,
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: isDark ? _bgDark : _bgLight,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      indicatorColor: isDark ? Colors.white.withValues(alpha: 0.10) : Colors.black.withValues(alpha: 0.06),
+      height: 60,
+      labelTextStyle: WidgetStateProperty.all(TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w500,
+        color: isDark ? Colors.white70 : Colors.black54,
+      )),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        final selected = states.contains(WidgetState.selected);
+        return IconThemeData(
+          color: selected
+              ? (isDark ? Colors.white : Colors.black87)
+              : (isDark ? Colors.white54 : Colors.black45),
+          size: 22,
+        );
+      }),
+    ),
   );
 }
 
@@ -87,7 +108,7 @@ class _MyAppState extends State<MyApp> {
         darkTheme: _buildTheme(Brightness.dark),
         themeMode: _isDark ? ThemeMode.dark : ThemeMode.light,
         home: _splashDone
-            ? AyahsPage(
+            ? _AppShell(
                 isDark: _isDark,
                 onToggleTheme: _toggleTheme,
               )
@@ -197,6 +218,246 @@ class SearchResult {
   });
 }
 
+// ── User data models ──────────────────────────────────────────────────────
+
+class WirdPlan {
+  final int id;
+  final String targetType; // 'pages' | 'ayahs' | 'minutes'
+  final double targetValue;
+  final int createdAt;
+
+  WirdPlan({
+    required this.id,
+    required this.targetType,
+    required this.targetValue,
+    required this.createdAt,
+  });
+
+  factory WirdPlan.fromMap(Map<String, Object?> m) => WirdPlan(
+        id: m['id'] as int,
+        targetType: m['target_type'] as String,
+        targetValue: (m['target_value'] as num).toDouble(),
+        createdAt: m['created_at'] as int,
+      );
+}
+
+class DailyProgress {
+  final String date;
+  final int planId;
+  final double completedValue;
+  final bool isCompleted;
+
+  DailyProgress({
+    required this.date,
+    required this.planId,
+    required this.completedValue,
+    required this.isCompleted,
+  });
+
+  factory DailyProgress.fromMap(Map<String, Object?> m) => DailyProgress(
+        date: m['date'] as String,
+        planId: m['plan_id'] as int,
+        completedValue: (m['completed_value'] as num).toDouble(),
+        isCompleted: (m['is_completed'] as int) == 1,
+      );
+}
+
+class ReadingSession {
+  final String date;
+  final int startAyahId;
+  final int endAyahId;
+  final int startPage;
+  final int endPage;
+  final int pagesRead;
+  final int durationSeconds;
+  final int startedAt;
+  final int endedAt;
+
+  ReadingSession({
+    required this.date,
+    required this.startAyahId,
+    required this.endAyahId,
+    required this.startPage,
+    required this.endPage,
+    required this.pagesRead,
+    required this.durationSeconds,
+    required this.startedAt,
+    required this.endedAt,
+  });
+}
+
+// ── UserDb — writable local user database ─────────────────────────────────
+
+class UserDb {
+  UserDb._();
+  static final UserDb instance = UserDb._();
+
+  Database? _db;
+
+  Future<Database> get _database async {
+    if (_db != null) return _db!;
+    final dbDir = await getDatabasesPath();
+    _db = await openDatabase(
+      join(dbDir, 'user_data.db'),
+      version: 1,
+      onCreate: (db, _) async {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS wird_plan (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type TEXT NOT NULL,
+            target_value REAL NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS daily_progress (
+            date TEXT PRIMARY KEY,
+            plan_id INTEGER NOT NULL,
+            completed_value REAL NOT NULL DEFAULT 0.0,
+            is_completed INTEGER NOT NULL DEFAULT 0,
+            completed_at INTEGER
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS reading_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            start_ayah_id INTEGER NOT NULL,
+            end_ayah_id INTEGER NOT NULL,
+            start_page INTEGER NOT NULL,
+            end_page INTEGER NOT NULL,
+            pages_read INTEGER NOT NULL DEFAULT 0,
+            duration_seconds INTEGER NOT NULL DEFAULT 0,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER NOT NULL
+          )
+        ''');
+      },
+    );
+    return _db!;
+  }
+
+  Future<WirdPlan?> getActivePlan() async {
+    final db = await _database;
+    final rows = await db.query(
+      'wird_plan',
+      where: 'is_active = 1',
+      orderBy: 'created_at DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : WirdPlan.fromMap(rows.first);
+  }
+
+  Future<void> savePlan(String type, double value) async {
+    final db = await _database;
+    await db.update('wird_plan', {'is_active': 0});
+    await db.insert('wird_plan', {
+      'target_type': type,
+      'target_value': value,
+      'is_active': 1,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<DailyProgress?> getTodayProgress() async {
+    final db = await _database;
+    final rows = await db.query(
+      'daily_progress',
+      where: 'date = ?',
+      whereArgs: [_todayStr()],
+    );
+    return rows.isEmpty ? null : DailyProgress.fromMap(rows.first);
+  }
+
+  Future<void> upsertProgress(String date, int planId, double delta) async {
+    if (delta <= 0) return;
+    final db = await _database;
+    final existing = await db.query(
+      'daily_progress',
+      where: 'date = ?',
+      whereArgs: [date],
+    );
+    if (existing.isEmpty) {
+      final plan = await getActivePlan();
+      final done = plan != null && delta >= plan.targetValue ? 1 : 0;
+      await db.insert('daily_progress', {
+        'date': date,
+        'plan_id': planId,
+        'completed_value': delta,
+        'is_completed': done,
+        if (done == 1) 'completed_at': DateTime.now().millisecondsSinceEpoch,
+      });
+    } else {
+      final row = existing.first;
+      final newVal = (row['completed_value'] as num).toDouble() + delta;
+      final plan = await getActivePlan();
+      final alreadyDone = (row['is_completed'] as int) == 1;
+      final nowDone = !alreadyDone && plan != null && newVal >= plan.targetValue;
+      await db.update(
+        'daily_progress',
+        {
+          'completed_value': newVal,
+          if (nowDone) 'is_completed': 1,
+          if (nowDone) 'completed_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'date = ?',
+        whereArgs: [date],
+      );
+    }
+  }
+
+  Future<void> insertSession(ReadingSession s) async {
+    final db = await _database;
+    await db.insert('reading_sessions', {
+      'date': s.date,
+      'start_ayah_id': s.startAyahId,
+      'end_ayah_id': s.endAyahId,
+      'start_page': s.startPage,
+      'end_page': s.endPage,
+      'pages_read': s.pagesRead,
+      'duration_seconds': s.durationSeconds,
+      'started_at': s.startedAt,
+      'ended_at': s.endedAt,
+    });
+  }
+
+  Future<int> calculateStreak() async {
+    final db = await _database;
+    final rows = await db.query(
+      'daily_progress',
+      where: 'is_completed = 1',
+      orderBy: 'date DESC',
+    );
+    if (rows.isEmpty) return 0;
+    int streak = 0;
+    DateTime check = DateTime.now();
+    final today = _todayStr();
+    // If today is not yet completed, start counting from yesterday.
+    if ((rows.first['date'] as String) != today) {
+      check = check.subtract(const Duration(days: 1));
+    }
+    for (final row in rows) {
+      final dateStr = row['date'] as String;
+      final y = check.year;
+      final m = check.month.toString().padLeft(2, '0');
+      final d = check.day.toString().padLeft(2, '0');
+      if (dateStr == '$y-$m-$d') {
+        streak++;
+        check = check.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  static String _todayStr() {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 String _colToString(Object? value) {
@@ -245,16 +506,615 @@ Widget _barBtn({
   );
 }
 
+// ── App shell (2-tab navigation) ──────────────────────────────────────────
+
+class _AppShell extends StatefulWidget {
+  final bool isDark;
+  final VoidCallback onToggleTheme;
+
+  const _AppShell({required this.isDark, required this.onToggleTheme});
+
+  @override
+  State<_AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<_AppShell> {
+  int _selectedTab = 0; // 0=home, 1=reader; starts on home, switches to reader if plan exists
+
+  final _homeKey = GlobalKey<_HomePageState>();
+
+  @override
+  void initState() {
+    super.initState();
+    // Returning users with an active wird plan start directly on the reader tab.
+    UserDb.instance.getActivePlan().then((plan) {
+      if (!mounted) return;
+      if (plan != null) setState(() => _selectedTab = 1);
+    });
+  }
+
+  void _switchTab(int tab) {
+    setState(() => _selectedTab = tab);
+    if (tab == 0) {
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _homeKey.currentState?.refresh());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final dividerColor = isDark ? Colors.white24 : Colors.black12;
+
+    return Scaffold(
+      body: IndexedStack(
+        index: _selectedTab,
+        children: [
+          HomePage(
+            key: _homeKey,
+            isDark: isDark,
+            onToggleTheme: widget.onToggleTheme,
+            onGoToReader: () => _switchTab(1),
+          ),
+          AyahsPage(
+            isDark: isDark,
+            onToggleTheme: widget.onToggleTheme,
+            isActiveTab: _selectedTab == 1,
+          ),
+        ],
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: dividerColor, width: 0.5)),
+        ),
+        child: NavigationBar(
+          selectedIndex: _selectedTab,
+          onDestinationSelected: _switchTab,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'الرئيسية',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.menu_book_outlined),
+              selectedIcon: Icon(Icons.menu_book),
+              label: 'القرآن',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Home page ──────────────────────────────────────────────────────────────
+
+class HomePage extends StatefulWidget {
+  final bool isDark;
+  final VoidCallback onToggleTheme;
+  final VoidCallback onGoToReader;
+
+  const HomePage({
+    super.key,
+    required this.isDark,
+    required this.onToggleTheme,
+    required this.onGoToReader,
+  });
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  WirdPlan? _plan;
+  DailyProgress? _progress;
+  int _streak = 0;
+  String _resumeSurahName = '';
+  int _resumePage = 1;
+  int _khatmahPercent = 0;
+  bool _loading = true;
+  bool _setupShown = false;
+
+  static const _goldColor = Color(0xFFc9a84c);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> refresh() => _loadData();
+
+  Future<void> _loadData() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedId = prefs.getInt('last_min_id') ?? 1;
+
+    final db = await _openDb();
+    final rows = await db.rawQuery(
+      'SELECT sura_name_ar, page FROM quran_ayahs WHERE id >= ? ORDER BY id LIMIT 1',
+      [savedId],
+    );
+    await db.close();
+
+    final plan = await UserDb.instance.getActivePlan();
+    DailyProgress? progress;
+    int streak = 0;
+    if (plan != null) {
+      progress = await UserDb.instance.getTodayProgress();
+      streak = await UserDb.instance.calculateStreak();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _resumeSurahName =
+          rows.isNotEmpty ? _colToString(rows.first['sura_name_ar']) : '';
+      _resumePage = rows.isNotEmpty ? rows.first['page'] as int : 1;
+      _khatmahPercent = (savedId / 6236 * 100).round().clamp(0, 100);
+      _plan = plan;
+      _progress = progress;
+      _streak = streak;
+      _loading = false;
+    });
+
+    if (plan == null && mounted && !_setupShown) {
+      _setupShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showWirdSetup();
+      });
+    }
+  }
+
+  void _showWirdSetup() {
+    if (!mounted) return;
+    final ctx = this.context;
+    showModalBottomSheet(
+      context: ctx,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _WirdSetupSheet(
+        onSaved: () {
+          Navigator.pop(ctx);
+          _loadData();
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final bg = isDark ? _bgDark : _bgLight;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final subColor = isDark ? Colors.white60 : Colors.black54;
+    final cardColor = isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7);
+
+    return Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        title: Text(
+          'القرآن الكريم يسر',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: textColor,
+          ),
+        ),
+        centerTitle: true,
+        actions: [
+          _barBtn(
+            icon: isDark ? Icons.wb_sunny_outlined : Icons.nightlight_round,
+            tooltip: isDark ? 'فاتح' : 'داكن',
+            onPressed: widget.onToggleTheme,
+            isDark: isDark,
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadData,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                children: [
+                  _buildContinueCard(cardColor, textColor, subColor),
+                  const SizedBox(height: 12),
+                  _buildWirdCard(isDark, cardColor, textColor, subColor),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(child: _buildStreakCard(cardColor, textColor, subColor)),
+                    const SizedBox(width: 12),
+                    Expanded(child: _buildKhatmahCard(cardColor, textColor, subColor)),
+                  ]),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildContinueCard(Color cardColor, Color textColor, Color subColor) {
+    return GestureDetector(
+      onTap: widget.onGoToReader,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.menu_book, color: _goldColor, size: 28),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('تابع القراءة',
+                      style: TextStyle(color: subColor, fontSize: 12)),
+                  const SizedBox(height: 2),
+                  Text(
+                    _resumeSurahName.isNotEmpty
+                        ? 'سورة $_resumeSurahName • صفحة $_resumePage'
+                        : 'ابدأ من البداية',
+                    style: TextStyle(
+                        color: textColor,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600),
+                    textDirection: TextDirection.rtl,
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_back_ios_new, color: subColor, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWirdCard(bool isDark, Color cardColor, Color textColor, Color subColor) {
+    if (_plan == null) {
+      return GestureDetector(
+        onTap: _showWirdSetup,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: cardColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _goldColor.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.add_circle_outline, color: _goldColor, size: 28),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('إعداد الورد اليومي',
+                      style: TextStyle(
+                          color: textColor,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text('ابدأ بخطوة صغيرة — ولو صفحة واحدة',
+                      style: TextStyle(color: subColor, fontSize: 12)),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final completed = _progress?.completedValue ?? 0.0;
+    final target = _plan!.targetValue;
+    final progressFraction = (completed / target).clamp(0.0, 1.0);
+    final isDone = _progress?.isCompleted ?? false;
+    final unitLabel = _plan!.targetType == 'pages'
+        ? 'صفحات'
+        : _plan!.targetType == 'minutes'
+            ? 'دقيقة'
+            : 'آيات';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Text('وردك اليوم',
+                style: TextStyle(
+                    color: textColor,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600)),
+            const Spacer(),
+            if (isDone)
+              Text('✓ أتممت وردك',
+                  style: TextStyle(color: _goldColor, fontSize: 12))
+            else
+              GestureDetector(
+                onTap: _showWirdSetup,
+                child: Text('تعديل',
+                    style: TextStyle(color: subColor, fontSize: 12)),
+              ),
+          ]),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progressFraction,
+              minHeight: 6,
+              backgroundColor:
+                  isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                  isDone ? const Color(0xFF4CAF50) : _goldColor),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Text(
+              '${completed.toStringAsFixed(completed == completed.roundToDouble() ? 0 : 1)} من ${target.toInt()} $unitLabel',
+              style: TextStyle(color: subColor, fontSize: 12),
+              textDirection: TextDirection.rtl,
+            ),
+            const Spacer(),
+            if (!isDone)
+              GestureDetector(
+                onTap: widget.onGoToReader,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: _goldColor,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text('اقرأ الآن',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStreakCard(Color cardColor, Color textColor, Color subColor) {
+    final label = _streak > 0 ? '$_streak ${_streak == 1 ? "يوم" : "أيام"}' : 'ابدأ اليوم';
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: cardColor, borderRadius: BorderRadius.circular(16)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('🔥', style: TextStyle(fontSize: 22)),
+        const SizedBox(height: 6),
+        Text(label,
+            style: TextStyle(
+                color: textColor,
+                fontSize: 16,
+                fontWeight: FontWeight.bold)),
+        Text('تواصل القراءة',
+            style: TextStyle(color: subColor, fontSize: 11)),
+      ]),
+    );
+  }
+
+  Widget _buildKhatmahCard(Color cardColor, Color textColor, Color subColor) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: cardColor, borderRadius: BorderRadius.circular(16)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('📖', style: TextStyle(fontSize: 22)),
+        const SizedBox(height: 6),
+        Text('$_khatmahPercent٪',
+            style: TextStyle(
+                color: textColor,
+                fontSize: 16,
+                fontWeight: FontWeight.bold)),
+        Text('من الختمة',
+            style: TextStyle(color: subColor, fontSize: 11)),
+      ]),
+    );
+  }
+}
+
+// ── Wird setup bottom sheet ────────────────────────────────────────────────
+
+class _WirdSetupSheet extends StatefulWidget {
+  final VoidCallback onSaved;
+  const _WirdSetupSheet({required this.onSaved});
+
+  @override
+  State<_WirdSetupSheet> createState() => _WirdSetupSheetState();
+}
+
+class _WirdSetupSheetState extends State<_WirdSetupSheet> {
+  String _type = 'pages';
+  double _value = 5;
+  bool _saving = false;
+
+  static const _goldColor = Color(0xFFc9a84c);
+
+  double get _min => _type == 'ayahs' ? 5.0 : 5.0;
+  double get _max => _type == 'pages' ? 30.0 : (_type == 'ayahs' ? 200.0 : 120.0);
+  int get _divisions => (_max - _min).round();
+
+  String get _summaryText {
+    final v = _value.round();
+    if (_type == 'pages') {
+      if (v == 1) return 'ستقرأ صفحة واحدة يومياً';
+      if (v == 2) return 'ستقرأ صفحتين يومياً';
+      return 'ستقرأ $v صفحات يومياً';
+    } else if (_type == 'ayahs') {
+      if (v == 1) return 'ستقرأ آية واحدة يومياً';
+      if (v == 2) return 'ستقرأ آيتين يومياً';
+      return 'ستقرأ $v آيات يومياً';
+    } else {
+      if (v == 1) return 'ستقرأ دقيقة واحدة يومياً';
+      if (v == 2) return 'ستقرأ دقيقتين يومياً';
+      return 'ستقرأ $v دقيقة يومياً';
+    }
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    await UserDb.instance.savePlan(_type, _value.roundToDouble());
+    widget.onSaved();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF2C2C2E) : Colors.white;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final subColor = isDark ? Colors.white60 : Colors.black54;
+
+    final types = [
+      ['pages', 'صفحات'],
+      ['ayahs', 'آيات'],
+      ['minutes', 'دقائق'],
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        left: 20,
+        right: 20,
+        top: 8,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white24 : Colors.black26,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Text('حدد وردك اليومي',
+              style: TextStyle(
+                  color: textColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: types.map((t) {
+              final selected = _type == t[0];
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _type = t[0];
+                    _value = _min;
+                  }),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: selected ? _goldColor : Colors.transparent,
+                      border: Border.all(
+                          color: selected
+                              ? _goldColor
+                              : (isDark ? Colors.white30 : Colors.black26)),
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Text(
+                      t[1],
+                      style: TextStyle(
+                        color: selected ? Colors.white : textColor,
+                        fontWeight:
+                            selected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 16),
+          Slider(
+            value: _value.clamp(_min, _max),
+            min: _min,
+            max: _max,
+            divisions: _divisions,
+            activeColor: _goldColor,
+            label: '${_value.round()}',
+            onChanged: (v) => setState(() => _value = v),
+          ),
+          Text(
+            '${_value.round()}',
+            style: const TextStyle(
+                color: _goldColor, fontSize: 36, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          Text(_summaryText,
+              style: TextStyle(color: subColor, fontSize: 14),
+              textDirection: TextDirection.rtl),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _saving ? null : _save,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _goldColor,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+              child: _saving
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : const Text('حفظ الورد',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
 // ── AyahsPage ──────────────────────────────────────────────────────────────
 
 class AyahsPage extends StatefulWidget {
   final bool isDark;
   final VoidCallback onToggleTheme;
+  final bool isActiveTab;
 
   const AyahsPage({
     super.key,
     required this.isDark,
     required this.onToggleTheme,
+    this.isActiveTab = true,
   });
 
   @override
@@ -335,6 +1195,12 @@ class _AyahsPageState extends State<AyahsPage>
   // Title-bar state — updated on every visible-ayah change.
   String _currentSuraName = '';
   int _currentJuz = 0;
+  int _currentPage = 1;
+
+  // Session tracking — records each continuous reading session for wird progress.
+  int _sessionStartAyahId = 0;
+  int _sessionStartPage = 1;
+  DateTime? _sessionStartTime;
 
   // Singleton highlight — the ayah id navigated to from search.  null = no highlight.
   // When true, _highlightId was set by a user tap (not navigation).
@@ -455,11 +1321,13 @@ class _AyahsPageState extends State<AyahsPage>
       _pointerCount = 0;
       // Save precise reading position before app is backgrounded.
       _schedulePositionSave();
+      if (widget.isActiveTab) _endSession();
     } else if (state == AppLifecycleState.resumed) {
       // Safety net: clear any flags that may have gone stale across the gap.
       _userDragging = false;
       _isPinching = false;
       _pointerCount = 0;
+      if (widget.isActiveTab) _startSession();
     }
   }
 
@@ -493,6 +1361,7 @@ class _AyahsPageState extends State<AyahsPage>
     // marker(N) above viewport → page N+1 is at top; no marker → first loaded page.
     final currentPage =
         primPage != 0 ? primPage + 1 : _ayahs.first.page;
+    _currentPage = currentPage; // track for session tracking (no rebuild needed)
     final suraName =
         _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
     final juz = _pageToJuz(currentPage);
@@ -612,6 +1481,70 @@ class _AyahsPageState extends State<AyahsPage>
         p.setDouble(_kPrefFontScale, _fontScale);
       });
     }
+  }
+
+  @override
+  void didUpdateWidget(AyahsPage old) {
+    super.didUpdateWidget(old);
+    if (widget.isActiveTab && !old.isActiveTab) {
+      _startSession();
+    } else if (!widget.isActiveTab && old.isActiveTab) {
+      _endSession();
+    }
+  }
+
+  static String _todayString() {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  void _startSession() {
+    _sessionStartAyahId = _lastKnownSaveId > 0
+        ? _lastKnownSaveId
+        : (_ayahs.isNotEmpty ? _ayahs.first.id : 1);
+    _sessionStartPage = _currentPage > 0 ? _currentPage : 1;
+    _sessionStartTime = DateTime.now();
+  }
+
+  Future<void> _endSession() async {
+    if (_sessionStartTime == null) return;
+    final startTime = _sessionStartTime!;
+    final startedAt = startTime.millisecondsSinceEpoch;
+    final startAyahId = _sessionStartAyahId;
+    final startPage = _sessionStartPage;
+    _sessionStartTime = null; // clear immediately to prevent double-end on re-entry
+
+    final endTime = DateTime.now();
+    final duration = endTime.difference(startTime).inSeconds;
+    if (duration < 5) return; // ignore accidental taps
+
+    final endAyahId = _lastKnownSaveId > 0
+        ? _lastKnownSaveId
+        : (_ayahs.isNotEmpty ? _ayahs.last.id : startAyahId);
+    final endPage = _currentPage > 0 ? _currentPage : startPage;
+    final pagesRead = (endPage - startPage).abs();
+
+    final session = ReadingSession(
+      date: _todayString(),
+      startAyahId: startAyahId,
+      endAyahId: endAyahId,
+      startPage: startPage,
+      endPage: endPage,
+      pagesRead: pagesRead,
+      durationSeconds: duration,
+      startedAt: startedAt,
+      endedAt: endTime.millisecondsSinceEpoch,
+    );
+    await UserDb.instance.insertSession(session);
+
+    final plan = await UserDb.instance.getActivePlan();
+    if (plan == null) return;
+    final delta = plan.targetType == 'pages'
+        ? pagesRead.toDouble()
+        : plan.targetType == 'minutes'
+            ? (duration / 60.0)
+            : (endAyahId - startAyahId).abs().toDouble();
+    await UserDb.instance.upsertProgress(_todayString(), plan.id, delta);
   }
 
   @override
@@ -823,9 +1756,10 @@ class _AyahsPageState extends State<AyahsPage>
         _reachedTop = fromPage == 1;
         _reachedBottom = toPage >= 604;
         _initialLoading = false;
-        // Initialise title bar from the saved ayah.
+        // Initialise title bar and page tracker from the saved ayah.
         _currentSuraName = target.suraNameAr;
         _currentJuz = _pageToJuz(target.page);
+        _currentPage = target.page;
         // Navigation overlay + stability-pinFrame path.
         _highlightId = savedId;
         _highlightKey = GlobalKey();
@@ -869,6 +1803,7 @@ class _AyahsPageState extends State<AyahsPage>
       });
     }
     _checkTutorial();
+    if (widget.isActiveTab && _ayahs.isNotEmpty) _startSession();
   }
 
   Future<void> _loadMore() async {

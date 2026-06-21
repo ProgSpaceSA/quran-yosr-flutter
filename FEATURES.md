@@ -23,7 +23,7 @@
 | Phase | Status |
 |---|---|
 | Phase 1 — Stability and Reading Core | ✅ Done |
-| Phase 2 — Daily Wird and Habit System | ⬜ Not started |
+| Phase 2 — Daily Wird and Habit System | 🔄 In progress |
 | Phase 3 — Organization | ⬜ Not started |
 | Phase 4 — Memorization | ⬜ Not started |
 | Phase 5 — Ramadan Features | ⬜ Not started |
@@ -1098,15 +1098,15 @@ Even if sync is not implemented now, local entities should use stable IDs and ti
 
 ---
 
-## Phase 2 - Daily Wird and Habit System — ⬜ Not started
+## Phase 2 - Daily Wird and Habit System — 🔄 In progress
 
-- [ ] Daily reading program
-- [ ] Daily wird target
-- [ ] Progress tracking
-- [ ] Daily reminder
-- [ ] Reading streak
-- [ ] Missed-day recovery
-- [ ] Flexible schedule
+- [x] Daily reading program — session tracking (start/end on tab switch & lifecycle)
+- [x] Daily wird target — pages / ayahs / minutes via _WirdSetupSheet
+- [x] Progress tracking — daily_progress table; home screen progress bar
+- [ ] Daily reminder — deferred to Phase 2b (needs flutter_local_notifications)
+- [x] Reading streak — calculateStreak() with consecutive-day logic
+- [ ] Missed-day recovery — deferred to Phase 2b (needs streak history data)
+- [ ] Flexible schedule — deferred to Phase 2b
 
 ---
 
@@ -1161,11 +1161,11 @@ Group khatmah should remain future because it requires account/backend.
 The first release should focus on:
 
 - [x] Reading-position/session fixes
-- [ ] Continue Reading
-- [ ] Daily wird target
-- [ ] Daily reminder
-- [ ] Progress tracking
-- [ ] Reading streak
+- [x] Continue Reading — home screen card; switches to reader tab
+- [x] Daily wird target — _WirdSetupSheet; pages / ayahs / minutes
+- [ ] Daily reminder — deferred Phase 2b
+- [x] Progress tracking — daily_progress upserted per session
+- [x] Reading streak — calculateStreak() on home screen
 - [ ] Bookmarks
 - [ ] Favorites
 - [ ] Notes
