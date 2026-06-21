@@ -2159,7 +2159,7 @@ class _NavSheet extends StatefulWidget {
 }
 
 class _NavSheetState extends State<_NavSheet> {
-  int _mode = 1; // 0=page  1=surah  2=ayah  — default: surah
+  int _mode = 1; // 0=page  1=surah  2=juz  3=ayah  — default: surah
   List<SurahInfo> _surahs = [];
   bool _loadingSurahs = true;
   int _selectedSurahNo = 1;
@@ -2253,6 +2253,23 @@ class _NavSheetState extends State<_NavSheet> {
       widget.onNavigateToSurah(suraNo, rows.first['id'] as int);
   }
 
+  static const _kJuzPageStarts = [
+    1, 22, 42, 62, 82, 102, 121, 142, 162, 182,
+    201, 221, 242, 262, 282, 302, 322, 342, 362, 382,
+    402, 422, 442, 462, 482, 502, 522, 542, 562, 582,
+  ];
+
+  Future<void> _goToJuz(int juzNo) async {
+    final page = _kJuzPageStarts[juzNo - 1];
+    final db = await _openDb();
+    final rows = await db.rawQuery(
+      'SELECT id FROM quran_ayahs WHERE page >= ? ORDER BY page, id LIMIT 1',
+      [page],
+    );
+    await db.close();
+    if (rows.isNotEmpty) widget.onNavigate(rows.first['id'] as int);
+  }
+
   Future<void> _goToAyah() async {
     final ayaNo = int.tryParse(_ayaNoCtrl.text.trim());
     if (ayaNo == null || ayaNo < 1) return;
@@ -2271,7 +2288,7 @@ class _NavSheetState extends State<_NavSheet> {
     final borderColor = isDark ? Colors.white24 : Colors.black12;
     final labelStyle =
         TextStyle(color: isDark ? Colors.white70 : Colors.black87);
-    final modeLabels = ['صفحة', 'سورة', 'آية'];
+    final modeLabels = ['صفحة', 'سورة', 'جزء', 'آية'];
 
     return Padding(
       padding:
@@ -2294,10 +2311,10 @@ class _NavSheetState extends State<_NavSheet> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(3, (i) {
+              children: List.generate(4, (i) {
                 final selected = _mode == i;
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: GestureDetector(
                     onTap: () {
                       if (_mode == 0 && i != 0) _pageFocus.unfocus();
@@ -2312,7 +2329,7 @@ class _NavSheetState extends State<_NavSheet> {
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 22, vertical: 9),
+                          horizontal: 14, vertical: 9),
                       decoration: BoxDecoration(
                         color: selected
                             ? (isDark
@@ -2448,8 +2465,46 @@ class _NavSheetState extends State<_NavSheet> {
                       ),
                     ],
                   ),
-          // ── Ayah mode ─────────────────────────────────────────────────
+          // ── Juz mode ──────────────────────────────────────────────────
           if (_mode == 2)
+            SizedBox(
+              height: 300,
+              child: ListView.builder(
+                itemCount: 30,
+                itemBuilder: (ctx, i) {
+                  final juzNo = i + 1;
+                  final page = _kJuzPageStarts[i];
+                  return ListTile(
+                    dense: true,
+                    leading: Text(
+                      '$juzNo',
+                      style: TextStyle(
+                        color: isDark ? Colors.white38 : Colors.black38,
+                        fontSize: 12,
+                      ),
+                    ),
+                    title: Text(
+                      'الجزء $juzNo',
+                      textDirection: TextDirection.rtl,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    trailing: Text(
+                      'صفحة $page',
+                      textDirection: TextDirection.rtl,
+                      style: TextStyle(
+                        color: isDark ? Colors.white38 : Colors.black38,
+                        fontSize: 12,
+                      ),
+                    ),
+                    onTap: () => _goToJuz(juzNo),
+                  );
+                },
+              ),
+            ),
+          // ── Ayah mode ─────────────────────────────────────────────────
+          if (_mode == 3)
             _loadingSurahs
                 ? const Padding(
                     padding: EdgeInsets.all(24),
