@@ -632,13 +632,10 @@ class _HomePageState extends State<HomePage> {
 
     final prefs = await SharedPreferences.getInstance();
     final savedId = prefs.getInt('last_min_id') ?? 1;
-
-    final db = await _openDb();
-    final rows = await db.rawQuery(
-      'SELECT sura_name_ar, page FROM quran_ayahs WHERE id >= ? ORDER BY id LIMIT 1',
-      [savedId],
-    );
-    await db.close();
+    // Read sura name and page from SharedPreferences (written by AyahsPage on each save).
+    // This avoids opening quran.db here, which would race with AyahsPage's own DB connection.
+    final suraName = prefs.getString('current_sura') ?? '';
+    final page = prefs.getInt('current_page') ?? 1;
 
     final plan = await UserDb.instance.getActivePlan();
     DailyProgress? progress;
@@ -650,9 +647,8 @@ class _HomePageState extends State<HomePage> {
 
     if (!mounted) return;
     setState(() {
-      _resumeSurahName =
-          rows.isNotEmpty ? _colToString(rows.first['sura_name_ar']) : '';
-      _resumePage = rows.isNotEmpty ? rows.first['page'] as int : 1;
+      _resumeSurahName = suraName;
+      _resumePage = page;
       _khatmahPercent = (savedId / 6236 * 100).round().clamp(0, 100);
       _plan = plan;
       _progress = progress;
@@ -1176,6 +1172,8 @@ class _AyahsPageState extends State<AyahsPage>
   static const _kPrefMinId = 'last_min_id';
   static const _kPrefFontScale = 'font_scale';
   static const _kPrefAnchorOffset = 'anchor_offset';
+  static const _kPrefCurrentSura = 'current_sura';
+  static const _kPrefCurrentPage = 'current_page';
   int _lastKnownSaveId = 0; // cached so dispose() can write without a scroll controller
   double _lastKnownAnchorOffset = 0.0; // cached alongside saveId for dispose()
   // Keys for each rendered _AyahRun, keyed by run's first ayah id.
@@ -1479,6 +1477,8 @@ class _AyahsPageState extends State<AyahsPage>
         p.setInt(_kPrefMinId, _lastKnownSaveId);
         p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
         p.setDouble(_kPrefFontScale, _fontScale);
+        if (_currentSuraName.isNotEmpty) p.setString(_kPrefCurrentSura, _currentSuraName);
+        if (_currentPage > 0) p.setInt(_kPrefCurrentPage, _currentPage);
       });
     }
   }
@@ -1561,6 +1561,8 @@ class _AyahsPageState extends State<AyahsPage>
         p.setInt(_kPrefMinId, _lastKnownSaveId);
         p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
         p.setDouble(_kPrefFontScale, _fontScale);
+        if (_currentSuraName.isNotEmpty) p.setString(_kPrefCurrentSura, _currentSuraName);
+        if (_currentPage > 0) p.setInt(_kPrefCurrentPage, _currentPage);
       });
     }
     _scrollController.removeListener(_onScroll);
