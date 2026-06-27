@@ -19,7 +19,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  debugPrint('[FCM-bg] ${message.notification?.title}: ${message.notification?.body}');
+  debugPrint(
+      '[FCM-bg] ${message.notification?.title}: ${message.notification?.body}');
 }
 
 Future<void> main() async {
@@ -51,7 +52,9 @@ ThemeData _buildTheme(Brightness brightness) {
       backgroundColor: isDark ? _bgDark : _bgLight,
       surfaceTintColor: Colors.transparent,
       shadowColor: Colors.transparent,
-      indicatorColor: isDark ? Colors.white.withValues(alpha: 0.10) : Colors.black.withValues(alpha: 0.06),
+      indicatorColor: isDark
+          ? Colors.white.withValues(alpha: 0.10)
+          : Colors.black.withValues(alpha: 0.06),
       height: 60,
       labelTextStyle: WidgetStateProperty.all(TextStyle(
         fontSize: 11,
@@ -97,7 +100,8 @@ class _MyAppState extends State<MyApp> {
 
   void _toggleTheme() {
     setState(() => _isDark = !_isDark);
-    SharedPreferences.getInstance().then((p) => p.setBool(_kPrefIsDark, _isDark));
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool(_kPrefIsDark, _isDark));
   }
 
   @override
@@ -395,7 +399,8 @@ class UserDb {
       final newVal = (row['completed_value'] as num).toDouble() + delta;
       final plan = await getActivePlan();
       final alreadyDone = (row['is_completed'] as int) == 1;
-      final nowDone = !alreadyDone && plan != null && newVal >= plan.targetValue;
+      final nowDone =
+          !alreadyDone && plan != null && newVal >= plan.targetValue;
       await db.update(
         'daily_progress',
         {
@@ -521,7 +526,9 @@ class _AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<_AppShell> {
-  int _selectedTab = 0; // 0=home, 1=reader; starts on home, switches to reader if plan exists
+  int _selectedTab =
+      0; // 0=home, 1=reader; starts on home, switches to reader if plan exists
+  bool _isAutoScrolling = false;
 
   final _homeKey = GlobalKey<_HomePageState>();
 
@@ -538,8 +545,8 @@ class _AppShellState extends State<_AppShell> {
   void _switchTab(int tab) {
     setState(() => _selectedTab = tab);
     if (tab == 0) {
-      WidgetsBinding.instance.addPostFrameCallback(
-          (_) => _homeKey.currentState?.refresh());
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _homeKey.currentState?.refresh());
     }
   }
 
@@ -562,10 +569,17 @@ class _AppShellState extends State<_AppShell> {
             isDark: isDark,
             onToggleTheme: widget.onToggleTheme,
             isActiveTab: _selectedTab == 1,
+            onAutoScrollChanged: (v) => setState(() => _isAutoScrolling = v),
           ),
         ],
       ),
-      bottomNavigationBar: Container(
+      bottomNavigationBar: AnimatedContainer(
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeInOut,
+        height: (_isAutoScrolling && _selectedTab == 1)
+            ? 0.0
+            : 60.0 + MediaQuery.of(context).viewPadding.bottom,
+        clipBehavior: Clip.hardEdge,
         decoration: BoxDecoration(
           border: Border(top: BorderSide(color: dividerColor, width: 0.5)),
         ),
@@ -688,7 +702,8 @@ class _HomePageState extends State<HomePage> {
     final bg = isDark ? _bgDark : _bgLight;
     final textColor = isDark ? Colors.white : Colors.black87;
     final subColor = isDark ? Colors.white60 : Colors.black54;
-    final cardColor = isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7);
+    final cardColor =
+        isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -698,7 +713,7 @@ class _HomePageState extends State<HomePage> {
           title: Text(
             'القرآن الكريم يسر',
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 20,
               fontWeight: FontWeight.w600,
               color: textColor,
             ),
@@ -723,16 +738,43 @@ class _HomePageState extends State<HomePage> {
                   children: [
                     _buildContinueCard(cardColor, textColor, subColor),
                     const SizedBox(height: 12),
-                    _buildWirdCard(isDark, cardColor, textColor, subColor),
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      Expanded(child: _buildStreakCard(cardColor, textColor, subColor)),
-                      const SizedBox(width: 12),
-                      Expanded(child: _buildKhatmahCard(cardColor, textColor, subColor)),
-                    ]),
+                    _buildWirdSection(
+                        isDark, bg, cardColor, textColor, subColor),
                   ],
                 ),
               ),
+      ),
+    );
+  }
+
+  Widget _buildWirdSection(
+      bool isDark, Color bg, Color cardColor, Color textColor, Color subColor) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'متابعة الورد اليومي',
+            style: TextStyle(
+              color: textColor,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildWirdCard(isDark, bg, textColor, subColor),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: _buildStreakCard(bg, textColor, subColor)),
+            const SizedBox(width: 10),
+            Expanded(child: _buildKhatmahCard(bg, textColor, subColor)),
+          ]),
+        ],
       ),
     );
   }
@@ -755,7 +797,7 @@ class _HomePageState extends State<HomePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('تابع القراءة',
-                      style: TextStyle(color: subColor, fontSize: 12)),
+                      style: TextStyle(color: subColor, fontSize: 14)),
                   const SizedBox(height: 2),
                   Text(
                     _resumeSurahName.isNotEmpty
@@ -763,7 +805,7 @@ class _HomePageState extends State<HomePage> {
                         : 'ابدأ من البداية',
                     style: TextStyle(
                         color: textColor,
-                        fontSize: 15,
+                        fontSize: 17,
                         fontWeight: FontWeight.w600),
                     textDirection: TextDirection.rtl,
                   ),
@@ -777,7 +819,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildWirdCard(bool isDark, Color cardColor, Color textColor, Color subColor) {
+  Widget _buildWirdCard(
+      bool isDark, Color cardColor, Color textColor, Color subColor) {
     if (_plan == null) {
       return GestureDetector(
         onTap: _showWirdSetup,
@@ -798,11 +841,11 @@ class _HomePageState extends State<HomePage> {
                   Text('إعداد الورد اليومي',
                       style: TextStyle(
                           color: textColor,
-                          fontSize: 15,
+                          fontSize: 17,
                           fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text('ابدأ بخطوة صغيرة — ولو صفحة واحدة',
-                      style: TextStyle(color: subColor, fontSize: 12)),
+                      style: TextStyle(color: subColor, fontSize: 14)),
                 ],
               ),
             ],
@@ -834,17 +877,17 @@ class _HomePageState extends State<HomePage> {
             Text('وردك اليوم',
                 style: TextStyle(
                     color: textColor,
-                    fontSize: 15,
+                    fontSize: 17,
                     fontWeight: FontWeight.w600)),
             const Spacer(),
             if (isDone)
               Text('✓ أتممت وردك',
-                  style: TextStyle(color: _goldColor, fontSize: 12))
+                  style: TextStyle(color: _goldColor, fontSize: 14))
             else
               GestureDetector(
                 onTap: _showWirdSetup,
                 child: Text('تعديل',
-                    style: TextStyle(color: subColor, fontSize: 12)),
+                    style: TextStyle(color: subColor, fontSize: 14)),
               ),
           ]),
           const SizedBox(height: 10),
@@ -853,8 +896,9 @@ class _HomePageState extends State<HomePage> {
             child: LinearProgressIndicator(
               value: progressFraction,
               minHeight: 6,
-              backgroundColor:
-                  isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+              backgroundColor: isDark
+                  ? Colors.white12
+                  : Colors.black.withValues(alpha: 0.08),
               valueColor: AlwaysStoppedAnimation<Color>(
                   isDone ? const Color(0xFF4CAF50) : _goldColor),
             ),
@@ -863,7 +907,7 @@ class _HomePageState extends State<HomePage> {
           Row(children: [
             Text(
               '${completed.toStringAsFixed(completed == completed.roundToDouble() ? 0 : 1)} من ${target.toInt()} $unitLabel',
-              style: TextStyle(color: subColor, fontSize: 12),
+              style: TextStyle(color: subColor, fontSize: 14),
               textDirection: TextDirection.rtl,
             ),
             const Spacer(),
@@ -880,7 +924,7 @@ class _HomePageState extends State<HomePage> {
                   child: const Text('اقرأ الآن',
                       style: TextStyle(
                           color: Colors.white,
-                          fontSize: 12,
+                          fontSize: 14,
                           fontWeight: FontWeight.bold)),
                 ),
               ),
@@ -890,22 +934,28 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  static String _dayLabel(int n) {
+    if (n == 1) return 'يوم';
+    if (n == 2) return 'يومان';
+    if (n % 10 >= 3 && n % 10 <= 9 && (n ~/ 10) % 10 == 0) return '$n أيام';
+    if ((n ~/ 10) % 10 != 0) return '$n يومًا';
+    return '$n أيام';
+  }
+
   Widget _buildStreakCard(Color cardColor, Color textColor, Color subColor) {
-    final label = _streak > 0 ? '$_streak ${_streak == 1 ? "يوم" : "أيام"}' : 'ابدأ اليوم';
+    final label = _streak > 0 ? _dayLabel(_streak) : 'ابدأ اليوم';
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
           color: cardColor, borderRadius: BorderRadius.circular(16)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('🔥', style: TextStyle(fontSize: 22)),
+        // const Text('🔥', style: TextStyle(fontSize: 22)),
         const SizedBox(height: 6),
         Text(label,
             style: TextStyle(
-                color: textColor,
-                fontSize: 16,
-                fontWeight: FontWeight.bold)),
-        Text('تواصل القراءة',
-            style: TextStyle(color: subColor, fontSize: 11)),
+                color: textColor, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text('فراءة دون انقطاع',
+            style: TextStyle(color: subColor, fontSize: 13)),
       ]),
     );
   }
@@ -916,15 +966,12 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
           color: cardColor, borderRadius: BorderRadius.circular(16)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('📖', style: TextStyle(fontSize: 22)),
+        // const Text('📖', style: TextStyle(fontSize: 22)),
         const SizedBox(height: 6),
         Text('$_khatmahPercent٪',
             style: TextStyle(
-                color: textColor,
-                fontSize: 16,
-                fontWeight: FontWeight.bold)),
-        Text('من الختمة',
-            style: TextStyle(color: subColor, fontSize: 11)),
+                color: textColor, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text('من الختمة', style: TextStyle(color: subColor, fontSize: 13)),
       ]),
     );
   }
@@ -948,7 +995,8 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
   static const _goldColor = Color(0xFFc9a84c);
 
   double get _min => _type == 'ayahs' ? 5.0 : 5.0;
-  double get _max => _type == 'pages' ? 30.0 : (_type == 'ayahs' ? 200.0 : 120.0);
+  double get _max =>
+      _type == 'pages' ? 30.0 : (_type == 'ayahs' ? 200.0 : 120.0);
   int get _divisions => (_max - _min).round();
 
   String get _summaryText {
@@ -991,118 +1039,118 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Container(
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        left: 20,
-        right: 20,
-        top: 8,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white24 : Colors.black26,
-                borderRadius: BorderRadius.circular(2),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          left: 20,
+          right: 20,
+          top: 8,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black26,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-          ),
-          Text('حدد وردك اليومي',
-              style: TextStyle(
-                  color: textColor,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: types.map((t) {
-              final selected = _type == t[0];
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: GestureDetector(
-                  onTap: () => setState(() {
-                    _type = t[0];
-                    _value = _min;
-                  }),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: selected ? _goldColor : Colors.transparent,
-                      border: Border.all(
-                          color: selected
-                              ? _goldColor
-                              : (isDark ? Colors.white30 : Colors.black26)),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Text(
-                      t[1],
-                      style: TextStyle(
-                        color: selected ? Colors.white : textColor,
-                        fontWeight:
-                            selected ? FontWeight.bold : FontWeight.normal,
+            Text('حدد وردك اليومي',
+                style: TextStyle(
+                    color: textColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: types.map((t) {
+                final selected = _type == t[0];
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: GestureDetector(
+                    onTap: () => setState(() {
+                      _type = t[0];
+                      _value = _min;
+                    }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected ? _goldColor : Colors.transparent,
+                        border: Border.all(
+                            color: selected
+                                ? _goldColor
+                                : (isDark ? Colors.white30 : Colors.black26)),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Text(
+                        t[1],
+                        style: TextStyle(
+                          color: selected ? Colors.white : textColor,
+                          fontWeight:
+                              selected ? FontWeight.bold : FontWeight.normal,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 16),
-          Slider(
-            value: _value.clamp(_min, _max),
-            min: _min,
-            max: _max,
-            divisions: _divisions,
-            activeColor: _goldColor,
-            label: '${_value.round()}',
-            onChanged: (v) => setState(() => _value = v),
-          ),
-          Text(
-            '${_value.round()}',
-            style: const TextStyle(
-                color: _goldColor, fontSize: 36, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 4),
-          Text(_summaryText,
-              style: TextStyle(color: subColor, fontSize: 14),
-              textDirection: TextDirection.rtl),
-          const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _saving ? null : _save,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _goldColor,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-              child: _saving
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2))
-                  : const Text('حفظ الورد',
-                      style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold)),
+                );
+              }).toList(),
             ),
-          ),
-          const SizedBox(height: 8),
-        ],
+            const SizedBox(height: 16),
+            Slider(
+              value: _value.clamp(_min, _max),
+              min: _min,
+              max: _max,
+              divisions: _divisions,
+              activeColor: _goldColor,
+              label: '${_value.round()}',
+              onChanged: (v) => setState(() => _value = v),
+            ),
+            Text(
+              '${_value.round()}',
+              style: const TextStyle(
+                  color: _goldColor, fontSize: 36, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(_summaryText,
+                style: TextStyle(color: subColor, fontSize: 14),
+                textDirection: TextDirection.rtl),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _saving ? null : _save,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _goldColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+                child: _saving
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Text('حفظ الورد',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
-    ),
     );
   }
 }
@@ -1113,12 +1161,14 @@ class AyahsPage extends StatefulWidget {
   final bool isDark;
   final VoidCallback onToggleTheme;
   final bool isActiveTab;
+  final ValueChanged<bool>? onAutoScrollChanged;
 
   const AyahsPage({
     super.key,
     required this.isDark,
     required this.onToggleTheme,
     this.isActiveTab = true,
+    this.onAutoScrollChanged,
   });
 
   @override
@@ -1154,8 +1204,10 @@ class _AyahsPageState extends State<AyahsPage>
   bool _userDragging = false; // true while finger is actively dragging
   bool _isPinching = false; // true during 2-finger pinch-to-zoom
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
-  double _zoomAnchorRawPixels = 0.0; // scroll pixels at pinch start (for proportional restore)
-  bool _zoomRestorePending = false; // only one postFrameCallback queued at a time
+  double _zoomAnchorRawPixels =
+      0.0; // scroll pixels at pinch start (for proportional restore)
+  bool _zoomRestorePending =
+      false; // only one postFrameCallback queued at a time
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
   Timer? _saveDebounce;
@@ -1182,7 +1234,8 @@ class _AyahsPageState extends State<AyahsPage>
   static const _kPrefAnchorOffset = 'anchor_offset';
   static const _kPrefCurrentSura = 'current_sura';
   static const _kPrefCurrentPage = 'current_page';
-  int _lastKnownSaveId = 0; // cached so dispose() can write without a scroll controller
+  int _lastKnownSaveId =
+      0; // cached so dispose() can write without a scroll controller
   double _lastKnownAnchorOffset = 0.0; // cached alongside saveId for dispose()
   // Keys for each rendered _AyahRun, keyed by run's first ayah id.
   // Used to scan for visible runs at save time.
@@ -1311,7 +1364,6 @@ class _AyahsPageState extends State<AyahsPage>
     WakelockPlus.enable();
     _loadInitial();
     _scrollController.addListener(_onScroll);
-
   }
 
   @override
@@ -1339,9 +1391,9 @@ class _AyahsPageState extends State<AyahsPage>
 
   // ── Shared top-inset: every "place at top" call uses this margin. ──────────
   static const double _kTopInset = 24.0;
+
   /// Top offset that scales with zoom so the landed position feels consistent.
   double get _navTopOffset => _kTopInset * _fontScale;
-
 
   /// Scans _pageMarkerKeyCache to determine which Mushaf page top is currently
   /// at the viewport top, then updates _currentSuraName / _currentJuz.
@@ -1351,7 +1403,8 @@ class _AyahsPageState extends State<AyahsPage>
     if (!_scrollController.hasClients || _ayahs.isEmpty) return;
     final pos = _scrollController.position;
     // Find marker with the largest topOnScreen ≤ 0 (last one to scroll above top).
-    int primPage = 0; double primTop = double.negativeInfinity;
+    int primPage = 0;
+    double primTop = double.negativeInfinity;
     for (final entry in _pageMarkerKeyCache.entries) {
       final ctx = entry.value.currentContext;
       if (ctx == null) continue;
@@ -1361,15 +1414,17 @@ class _AyahsPageState extends State<AyahsPage>
         final reveal =
             RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
         final top = reveal - pos.pixels;
-        if (top <= 0 && top > primTop) { primTop = top; primPage = entry.key; }
+        if (top <= 0 && top > primTop) {
+          primTop = top;
+          primPage = entry.key;
+        }
       } catch (_) {}
     }
     // marker(N) above viewport → page N+1 is at top; no marker → first loaded page.
-    final currentPage =
-        primPage != 0 ? primPage + 1 : _ayahs.first.page;
-    _currentPage = currentPage; // track for session tracking (no rebuild needed)
-    final suraName =
-        _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
+    final currentPage = primPage != 0 ? primPage + 1 : _ayahs.first.page;
+    _currentPage =
+        currentPage; // track for session tracking (no rebuild needed)
+    final suraName = _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
     final juz = _pageToJuz(currentPage);
     if (suraName != _currentSuraName || juz != _currentJuz) {
       setState(() {
@@ -1420,7 +1475,7 @@ class _AyahsPageState extends State<AyahsPage>
     final target = (_zoomAnchorRawPixels * (_fontScale / _baseFontScale))
         .clamp(0.0, pos.maxScrollExtent);
     debugPrint('[ZoomRestore] px=${_zoomAnchorRawPixels.toStringAsFixed(0)} '
-        'ratio=${(_fontScale/_baseFontScale).toStringAsFixed(2)} → ${target.toStringAsFixed(0)}');
+        'ratio=${(_fontScale / _baseFontScale).toStringAsFixed(2)} → ${target.toStringAsFixed(0)}');
     _scrollController.jumpTo(target);
   }
 
@@ -1431,7 +1486,8 @@ class _AyahsPageState extends State<AyahsPage>
 
   void _debounceSave() {
     _saveDebounce?.cancel();
-    _saveDebounce = Timer(const Duration(milliseconds: 1500), _doSaveReadingPosition);
+    _saveDebounce =
+        Timer(const Duration(milliseconds: 1500), _doSaveReadingPosition);
   }
 
   /// Scans visible _AyahRun widgets, picks the one that owns the viewport top
@@ -1443,8 +1499,10 @@ class _AyahsPageState extends State<AyahsPage>
 
     // Primary: run whose top is ≤ 0 and extends into viewport (owns viewport top).
     // Fallback: first run fully below viewport top.
-    double primTop = double.negativeInfinity; int primId = 0;
-    double fallTop = double.infinity;         int fallId = 0;
+    double primTop = double.negativeInfinity;
+    int primId = 0;
+    double fallTop = double.infinity;
+    int fallId = 0;
 
     for (final entry in _runKeyCache.entries) {
       final ctx = entry.value.currentContext;
@@ -1456,17 +1514,27 @@ class _AyahsPageState extends State<AyahsPage>
             RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
         final top = reveal - pos.pixels;
         final h = box.size.height;
-        if (top < viewportH && top + h > 0) { // visible
-          if (top <= 0 && top > primTop) { primTop = top; primId = entry.key; }
-          if (top > 0 && top < fallTop)  { fallTop = top; fallId = entry.key; }
+        if (top < viewportH && top + h > 0) {
+          // visible
+          if (top <= 0 && top > primTop) {
+            primTop = top;
+            primId = entry.key;
+          }
+          if (top > 0 && top < fallTop) {
+            fallTop = top;
+            fallId = entry.key;
+          }
         }
       } catch (_) {}
     }
 
-    final anchorId = primId != 0 ? primId
-        : (fallId != 0 ? fallId
-        : (_lastKnownSaveId > 0 ? _lastKnownSaveId
-        : (_ayahs.isNotEmpty ? _ayahs.first.id : 0)));
+    final anchorId = primId != 0
+        ? primId
+        : (fallId != 0
+            ? fallId
+            : (_lastKnownSaveId > 0
+                ? _lastKnownSaveId
+                : (_ayahs.isNotEmpty ? _ayahs.first.id : 0)));
     final anchorOffset = primId != 0 ? primTop : (fallId != 0 ? fallTop : 0.0);
     final measured = primId != 0 || fallId != 0;
 
@@ -1485,7 +1553,8 @@ class _AyahsPageState extends State<AyahsPage>
         p.setInt(_kPrefMinId, _lastKnownSaveId);
         p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
         p.setDouble(_kPrefFontScale, _fontScale);
-        if (_currentSuraName.isNotEmpty) p.setString(_kPrefCurrentSura, _currentSuraName);
+        if (_currentSuraName.isNotEmpty)
+          p.setString(_kPrefCurrentSura, _currentSuraName);
         if (_currentPage > 0) p.setInt(_kPrefCurrentPage, _currentPage);
       });
     }
@@ -1520,7 +1589,8 @@ class _AyahsPageState extends State<AyahsPage>
     final startedAt = startTime.millisecondsSinceEpoch;
     final startAyahId = _sessionStartAyahId;
     final startPage = _sessionStartPage;
-    _sessionStartTime = null; // clear immediately to prevent double-end on re-entry
+    _sessionStartTime =
+        null; // clear immediately to prevent double-end on re-entry
 
     final endTime = DateTime.now();
     final duration = endTime.difference(startTime).inSeconds;
@@ -1569,7 +1639,8 @@ class _AyahsPageState extends State<AyahsPage>
         p.setInt(_kPrefMinId, _lastKnownSaveId);
         p.setDouble(_kPrefAnchorOffset, _lastKnownAnchorOffset);
         p.setDouble(_kPrefFontScale, _fontScale);
-        if (_currentSuraName.isNotEmpty) p.setString(_kPrefCurrentSura, _currentSuraName);
+        if (_currentSuraName.isNotEmpty)
+          p.setString(_kPrefCurrentSura, _currentSuraName);
         if (_currentPage > 0) p.setInt(_kPrefCurrentPage, _currentPage);
       });
     }
@@ -1757,7 +1828,9 @@ class _AyahsPageState extends State<AyahsPage>
       // by correctBy's inaccurate estimated-height delta.
       final target =
           ayahs.firstWhere((a) => a.id >= savedId, orElse: () => ayahs.first);
-      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
+      for (final a in ayahs) {
+        _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr);
+      }
       setState(() {
         _ayahs.addAll(ayahs);
         _recomputeItems();
@@ -1786,8 +1859,9 @@ class _AyahsPageState extends State<AyahsPage>
         // Only skip pin when truly restoring to the very beginning
         // (first ayah, no offset saved). Any non-trivial target still needs
         // the full pinFrame path to land at the right position.
-        final isDefaultStart = savedId <= (_ayahs.isNotEmpty ? _ayahs.first.id : 1)
-            && savedAnchorOffset == 0.0;
+        final isDefaultStart =
+            savedId <= (_ayahs.isNotEmpty ? _ayahs.first.id : 1) &&
+                savedAnchorOffset == 0.0;
         if (fromPage == 1 && savedPage == 1 && isDefaultStart) {
           // Already at the very top with nothing to restore — skip pin.
           _justNavigated = false;
@@ -1823,7 +1897,9 @@ class _AyahsPageState extends State<AyahsPage>
       final ayahs = await _fetch('id > ?', [_maxId], 'id ASC');
       debugPrint('[LoadMore] Got ${ayahs.length} ayahs'
           '${ayahs.isNotEmpty ? " (ids ${ayahs.first.id}–${ayahs.last.id})" : ""}');
-      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
+      for (final a in ayahs) {
+        _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr);
+      }
       setState(() {
         _ayahs.addAll(ayahs);
         _recomputeItems();
@@ -1861,7 +1937,9 @@ class _AyahsPageState extends State<AyahsPage>
       final oldPixels = _scrollController.hasClients
           ? _scrollController.position.pixels
           : 0.0;
-      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
+      for (final a in ayahs) {
+        _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr);
+      }
       setState(() {
         _ayahs.insertAll(0, ayahs);
         _recomputeItems();
@@ -1884,11 +1962,11 @@ class _AyahsPageState extends State<AyahsPage>
             // time the DB returned, scroll to 0 so the new pages are
             // immediately visible.  Otherwise keep the viewport locked on the
             // same content (stable correction).
-            final target = oldPixels < 10.0
-                ? 0.0
-                : (oldPixels + delta).clamp(0.0, newMax);
+            final target =
+                oldPixels < 10.0 ? 0.0 : (oldPixels + delta).clamp(0.0, newMax);
             _scrollController.jumpTo(target);
-            debugPrint('[LoadPrev-correctBy] → jumpTo=${target.toStringAsFixed(0)}');
+            debugPrint(
+                '[LoadPrev-correctBy] → jumpTo=${target.toStringAsFixed(0)}');
           }
         }
         // One more frame to let the corrected position settle, THEN release.
@@ -1959,7 +2037,9 @@ class _AyahsPageState extends State<AyahsPage>
           '${ayahs.isNotEmpty ? " (ids ${ayahs.first.id}–${ayahs.last.id})" : ""}'
           ' — target id=$startId at list-idx=$targetIdx');
 
-      for (final a in ayahs) { _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr); }
+      for (final a in ayahs) {
+        _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr);
+      }
       _justNavigated = true;
       setState(() {
         _ayahs.addAll(ayahs);
@@ -2034,8 +2114,7 @@ class _AyahsPageState extends State<AyahsPage>
       final headerKey = _navHeaderSuraNo != null
           ? _surahHeaderKeyCache[_navHeaderSuraNo]
           : null;
-      final pinKey =
-          (headerKey?.currentContext != null) ? headerKey : hlKey;
+      final pinKey = (headerKey?.currentContext != null) ? headerKey : hlKey;
       if (pinKey?.currentContext != null) {
         _placeItemAtTop(pinKey!, offsetFromTop: postOffset);
       } else {
@@ -2061,14 +2140,16 @@ class _AyahsPageState extends State<AyahsPage>
         final finalHeaderKey = _navHeaderSuraNo != null
             ? _surahHeaderKeyCache[_navHeaderSuraNo]
             : null;
-        final finalPinKey =
-            (finalHeaderKey?.currentContext != null) ? finalHeaderKey : hlKeyNow;
+        final finalPinKey = (finalHeaderKey?.currentContext != null)
+            ? finalHeaderKey
+            : hlKeyNow;
         if (finalPinKey?.currentContext != null) {
           _placeItemAtTop(finalPinKey!, offsetFromTop: postOffset);
         }
         _navHeaderSuraNo = null;
         setState(() => _navigating = false);
-        debugPrint('[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
+        debugPrint(
+            '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
         // Safety re-pin 500ms later — use captured pin key (header or ayah).
         final safetyPinKey = finalPinKey;
         Future.delayed(const Duration(milliseconds: 500), () {
@@ -2134,12 +2215,14 @@ class _AyahsPageState extends State<AyahsPage>
     })
       ..start();
     setState(() => _autoScrolling = true);
+    widget.onAutoScrollChanged?.call(true);
   }
 
   void _stopAutoScroll() {
     _autoScrollTicker?.dispose();
     _autoScrollTicker = null;
     setState(() => _autoScrolling = false);
+    widget.onAutoScrollChanged?.call(false);
   }
 
   void _toggleAutoScroll() =>
@@ -2300,100 +2383,116 @@ class _AyahsPageState extends State<AyahsPage>
     }
 
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        titleSpacing: 0,
-        title: Row(
-          textDirection: TextDirection.ltr,
-          children: [
-            // LEFT side
-            _barBtn(
-              icon: isDark ? Icons.wb_sunny_rounded : Icons.nightlight_round,
-              tooltip: isDark ? 'وضع النهار' : 'وضع الليل',
-              onPressed: widget.onToggleTheme,
-              isDark: isDark,
-            ),
-            _barBtn(
-              icon: Icons.info_outline,
-              tooltip: 'عن التطبيق',
-              onPressed: _showInfoDialog,
-              isDark: isDark,
-            ),
-            // CENTER title
-            const Expanded(
-              child: Text(
-                'القرآن الكريم',
-                textAlign: TextAlign.center,
-              ),
-            ),
-            // RIGHT side
-            _barBtn(
-              icon: Icons.menu_book_outlined,
-              tooltip: 'انتقل إلى',
-              onPressed: _showNavSheet,
-              isDark: isDark,
-            ),
-            _barBtn(
-              icon: Icons.search,
-              tooltip: 'بحث',
-              onPressed: _openSearch,
-              isDark: isDark,
-            ),
-            const SizedBox(width: 4),
-          ],
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(
+          _autoScrolling ? 0 : kToolbarHeight + 30.0,
         ),
-        // ── Title bar: surah name | juz ──────────────────────────────
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(30),
-          child: Container(
-            height: 30,
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(color: dividerColor, width: 0.5),
-              ),
-            ),
-            child: Row(
-              textDirection: TextDirection.ltr,
-              children: [
-                // Left: surah name
-                Expanded(
-                  child: Text(
-                    _currentSuraName.isNotEmpty ? 'سورة $_currentSuraName' : '',
-                    textAlign: TextAlign.center,
-                    textDirection: TextDirection.rtl,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.white54 : Colors.black54,
-                      fontFamily: '',
+        child: ClipRect(
+          child: AnimatedSlide(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeInOut,
+            offset: _autoScrolling ? const Offset(0, -1) : Offset.zero,
+            child: AppBar(
+              automaticallyImplyLeading: false,
+              titleSpacing: 0,
+              title: Row(
+                textDirection: TextDirection.ltr,
+                children: [
+                  // LEFT side
+                  _barBtn(
+                    icon: isDark
+                        ? Icons.wb_sunny_rounded
+                        : Icons.nightlight_round,
+                    tooltip: isDark ? 'وضع النهار' : 'وضع الليل',
+                    onPressed: widget.onToggleTheme,
+                    isDark: isDark,
+                  ),
+                  _barBtn(
+                    icon: Icons.info_outline,
+                    tooltip: 'عن التطبيق',
+                    onPressed: _showInfoDialog,
+                    isDark: isDark,
+                  ),
+                  // CENTER title
+                  const Expanded(
+                    child: Text(
+                      'القرآن الكريم',
+                      textAlign: TextAlign.center,
                     ),
                   ),
-                ),
-                // Vertical hairline
-                SizedBox(
-                  height: 16,
-                  child: VerticalDivider(
-                    color: dividerColor,
-                    width: 1,
-                    thickness: 1,
+                  // RIGHT side
+                  _barBtn(
+                    icon: Icons.menu_book_outlined,
+                    tooltip: 'انتقل إلى',
+                    onPressed: _showNavSheet,
+                    isDark: isDark,
                   ),
-                ),
-                // Right: juz number
-                Expanded(
-                  child: Text(
-                    _currentJuz > 0 ? 'الجزء $_currentJuz' : '',
-                    textAlign: TextAlign.center,
-                    textDirection: TextDirection.rtl,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.white54 : Colors.black54,
+                  _barBtn(
+                    icon: Icons.search,
+                    tooltip: 'بحث',
+                    onPressed: _openSearch,
+                    isDark: isDark,
+                  ),
+                  const SizedBox(width: 4),
+                ],
+              ),
+              // ── Title bar: surah name | juz ──────────────────────────────
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(30),
+                child: Container(
+                  height: 30,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: dividerColor, width: 0.5),
                     ),
                   ),
+                  child: Row(
+                    textDirection: TextDirection.ltr,
+                    children: [
+                      // Left: surah name
+                      Expanded(
+                        child: Text(
+                          _currentSuraName.isNotEmpty
+                              ? 'سورة $_currentSuraName'
+                              : '',
+                          textAlign: TextAlign.center,
+                          textDirection: TextDirection.rtl,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.white54 : Colors.black54,
+                            fontFamily: 'sans-serif',
+                          ),
+                        ),
+                      ),
+                      // Vertical hairline
+                      SizedBox(
+                        height: 16,
+                        child: VerticalDivider(
+                          color: dividerColor,
+                          width: 1,
+                          thickness: 1,
+                        ),
+                      ),
+                      // Right: juz number
+                      Expanded(
+                        child: Text(
+                          _currentJuz > 0 ? 'الجزء $_currentJuz' : '',
+                          textAlign: TextAlign.center,
+                          textDirection: TextDirection.rtl,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.white54 : Colors.black54,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
-          ),
-        ),
-      ),
+              ),
+            ), // AppBar
+          ), // AnimatedSlide
+        ), // ClipRect
+      ), // PreferredSize
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: isDark ? _bgDark : _bgLight,
@@ -2478,8 +2577,7 @@ class _AyahsPageState extends State<AyahsPage>
                 SharedPreferences.getInstance()
                     .then((p) => p.setDouble(_kPrefFontScale, _fontScale));
                 _zoomBadgeTimer?.cancel();
-                _zoomBadgeTimer =
-                    Timer(const Duration(milliseconds: 1500), () {
+                _zoomBadgeTimer = Timer(const Duration(milliseconds: 1500), () {
                   if (mounted) setState(() => _showZoomBadge = false);
                 });
               }
@@ -2491,8 +2589,7 @@ class _AyahsPageState extends State<AyahsPage>
                 SharedPreferences.getInstance()
                     .then((p) => p.setDouble(_kPrefFontScale, _fontScale));
                 _zoomBadgeTimer?.cancel();
-                _zoomBadgeTimer =
-                    Timer(const Duration(milliseconds: 1500), () {
+                _zoomBadgeTimer = Timer(const Duration(milliseconds: 1500), () {
                   if (mounted) setState(() => _showZoomBadge = false);
                 });
               }
@@ -2565,7 +2662,7 @@ class _AyahsPageState extends State<AyahsPage>
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold,
                                     color: headerTextColor,
-                                    fontFamily: '',
+                                    fontFamily: 'sans-serif',
                                   ),
                                 ),
                               ),
@@ -2609,8 +2706,8 @@ class _AyahsPageState extends State<AyahsPage>
                                   child: Divider(
                                       color: dividerColor, thickness: 1)),
                               Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 10),
                                 child: Text(
                                   '${item.page}',
                                   style: TextStyle(
@@ -3201,9 +3298,36 @@ class _NavSheetState extends State<_NavSheet> {
   }
 
   static const _kJuzPageStarts = [
-    1, 22, 42, 62, 82, 102, 121, 142, 162, 182,
-    201, 221, 242, 262, 282, 302, 322, 342, 362, 382,
-    402, 422, 442, 462, 482, 502, 522, 542, 562, 582,
+    1,
+    22,
+    42,
+    62,
+    82,
+    102,
+    121,
+    142,
+    162,
+    182,
+    201,
+    221,
+    242,
+    262,
+    282,
+    302,
+    322,
+    342,
+    362,
+    382,
+    402,
+    422,
+    442,
+    462,
+    482,
+    502,
+    522,
+    542,
+    562,
+    582,
   ];
 
   Future<void> _goToJuz(int juzNo) async {
@@ -3362,9 +3486,8 @@ class _NavSheetState extends State<_NavSheet> {
                           decoration: InputDecoration(
                             hintText: 'ابحث عن سورة...',
                             hintStyle: TextStyle(
-                                color: isDark
-                                    ? Colors.white38
-                                    : Colors.black38),
+                                color:
+                                    isDark ? Colors.white38 : Colors.black38),
                             prefixIcon: const Icon(Icons.search),
                             border: const OutlineInputBorder(),
                             isDense: true,
