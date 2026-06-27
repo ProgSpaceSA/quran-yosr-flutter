@@ -36,8 +36,9 @@ const _bgDark = Color(0xFF1C1C1E);
 
 ThemeData _buildTheme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
-  return ThemeData(
+  final base = ThemeData(
     brightness: brightness,
+    fontFamily: 'Rubik',
     scaffoldBackgroundColor: isDark ? _bgDark : _bgLight,
     appBarTheme: AppBarTheme(
       backgroundColor: isDark ? _bgDark : _bgLight,
@@ -68,6 +69,7 @@ ThemeData _buildTheme(Brightness brightness) {
       }),
     ),
   );
+  return base;
 }
 
 // ── App root ───────────────────────────────────────────────────────────────
@@ -572,9 +574,9 @@ class _AppShellState extends State<_AppShell> {
           onDestinationSelected: _switchTab,
           destinations: const [
             NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home),
-              label: 'الرئيسية',
+              icon: Icon(Icons.grid_view_outlined),
+              selectedIcon: Icon(Icons.grid_view),
+              label: 'لوحتي',
             ),
             NavigationDestination(
               icon: Icon(Icons.menu_book_outlined),
@@ -688,47 +690,50 @@ class _HomePageState extends State<HomePage> {
     final subColor = isDark ? Colors.white60 : Colors.black54;
     final cardColor = isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7);
 
-    return Scaffold(
-      backgroundColor: bg,
-      appBar: AppBar(
-        title: Text(
-          'القرآن الكريم يسر',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: textColor,
-          ),
-        ),
-        centerTitle: true,
-        actions: [
-          _barBtn(
-            icon: isDark ? Icons.wb_sunny_outlined : Icons.nightlight_round,
-            tooltip: isDark ? 'فاتح' : 'داكن',
-            onPressed: widget.onToggleTheme,
-            isDark: isDark,
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                children: [
-                  _buildContinueCard(cardColor, textColor, subColor),
-                  const SizedBox(height: 12),
-                  _buildWirdCard(isDark, cardColor, textColor, subColor),
-                  const SizedBox(height: 12),
-                  Row(children: [
-                    Expanded(child: _buildStreakCard(cardColor, textColor, subColor)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildKhatmahCard(cardColor, textColor, subColor)),
-                  ]),
-                ],
-              ),
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: bg,
+        appBar: AppBar(
+          title: Text(
+            'القرآن الكريم يسر',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: textColor,
             ),
+          ),
+          centerTitle: true,
+          actions: [
+            _barBtn(
+              icon: isDark ? Icons.wb_sunny_outlined : Icons.nightlight_round,
+              tooltip: isDark ? 'فاتح' : 'داكن',
+              onPressed: widget.onToggleTheme,
+              isDark: isDark,
+            ),
+            const SizedBox(width: 8),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: _loadData,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  children: [
+                    _buildContinueCard(cardColor, textColor, subColor),
+                    const SizedBox(height: 12),
+                    _buildWirdCard(isDark, cardColor, textColor, subColor),
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      Expanded(child: _buildStreakCard(cardColor, textColor, subColor)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _buildKhatmahCard(cardColor, textColor, subColor)),
+                    ]),
+                  ],
+                ),
+              ),
+      ),
     );
   }
 
@@ -983,7 +988,9 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
       ['minutes', 'دقائق'],
     ];
 
-    return Container(
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Container(
       decoration: BoxDecoration(
         color: bg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -1095,6 +1102,7 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
           const SizedBox(height: 8),
         ],
       ),
+    ),
     );
   }
 }
@@ -2356,6 +2364,7 @@ class _AyahsPageState extends State<AyahsPage>
                     style: TextStyle(
                       fontSize: 12,
                       color: isDark ? Colors.white54 : Colors.black54,
+                      fontFamily: '',
                     ),
                   ),
                 ),
@@ -2556,6 +2565,7 @@ class _AyahsPageState extends State<AyahsPage>
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold,
                                     color: headerTextColor,
+                                    fontFamily: '',
                                   ),
                                 ),
                               ),
