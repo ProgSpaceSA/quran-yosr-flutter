@@ -25,7 +25,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  if (Firebase.apps.isEmpty) await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   runApp(const MyApp());
 }
@@ -33,7 +33,19 @@ Future<void> main() async {
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 const _bgLight = Color(0xFFFFFFFF);
-const _bgDark = Color(0xFF1C1C1E);
+const _bgDark  = Color(0xFF1C1C1E);
+
+// Opaque text colors — lerp(bg, fg, α) — prevents Arabic ligature overlap from
+// accumulating opacity. Reference: dark bg=_bgDark, light bg=_bgLight.
+const _tw85 = Color(0xFFDDDDDD); // white × 0.85
+const _tw70 = Color(0xFFBBBBBC); // white × 0.70
+const _tw60 = Color(0xFFA4A4A5); // white × 0.60
+const _tw54 = Color(0xFF979798); // white × 0.54
+const _tw38 = Color(0xFF727274); // white × 0.38
+const _tb87 = Color(0xFF212121); // black × 0.87
+const _tb54 = Color(0xFF757575); // black × 0.54
+const _tb45 = Color(0xFF8C8C8C); // black × 0.45
+const _tb38 = Color(0xFF9E9E9E); // black × 0.38
 
 ThemeData _buildTheme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
@@ -43,7 +55,7 @@ ThemeData _buildTheme(Brightness brightness) {
     scaffoldBackgroundColor: isDark ? _bgDark : _bgLight,
     appBarTheme: AppBarTheme(
       backgroundColor: isDark ? _bgDark : _bgLight,
-      foregroundColor: isDark ? Colors.white : Colors.black87,
+      foregroundColor: isDark ? Colors.white : _tb87,
       elevation: 1,
       surfaceTintColor: Colors.transparent,
     ),
@@ -59,14 +71,14 @@ ThemeData _buildTheme(Brightness brightness) {
       labelTextStyle: WidgetStateProperty.all(TextStyle(
         fontSize: 11,
         fontWeight: FontWeight.w500,
-        color: isDark ? Colors.white70 : Colors.black54,
+        color: isDark ? _tw70 : _tb54,
       )),
       iconTheme: WidgetStateProperty.resolveWith((states) {
         final selected = states.contains(WidgetState.selected);
         return IconThemeData(
           color: selected
-              ? (isDark ? Colors.white : Colors.black87)
-              : (isDark ? Colors.white54 : Colors.black45),
+              ? (isDark ? Colors.white : _tb87)
+              : (isDark ? _tw54 : _tb45),
           size: 22,
         );
       }),
@@ -463,6 +475,17 @@ class UserDb {
     final now = DateTime.now();
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
+
+  static Future<void> resetForTest() async {
+    await instance._db?.close();
+    instance._db = null;
+    final dbDir = await getDatabasesPath();
+    await deleteDatabase(join(dbDir, 'user_data.db'));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    // Suppress the tutorial overlay so it doesn't block UI during tests.
+    await prefs.setBool('tutorial_shown', true);
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -486,6 +509,7 @@ Future<Database> _openDb() async {
 // ── AppBar button helper ───────────────────────────────────────────────────
 
 Widget _barBtn({
+  Key? key,
   required IconData icon,
   required VoidCallback onPressed,
   required String tooltip,
@@ -502,6 +526,7 @@ Widget _barBtn({
         borderRadius: BorderRadius.circular(8),
       ),
       child: IconButton(
+        key: key,
         icon: Icon(icon),
         tooltip: tooltip,
         onPressed: onPressed,
@@ -700,8 +725,8 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final isDark = widget.isDark;
     final bg = isDark ? _bgDark : _bgLight;
-    final textColor = isDark ? Colors.white : Colors.black87;
-    final subColor = isDark ? Colors.white60 : Colors.black54;
+    final textColor = isDark ? Colors.white : _tb87;
+    final subColor = isDark ? _tw60 : _tb54;
     final cardColor =
         isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7);
 
@@ -710,13 +735,25 @@ class _HomePageState extends State<HomePage> {
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          title: Text(
-            'القرآن الكريم يسر',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: textColor,
-            ),
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.asset(
+                isDark
+                    ? 'assets/images/quran-type-white.png'
+                    : 'assets/images/quran-type.png',
+                height: 28,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'يُسْرٌ',
+                style: TextStyle(
+                  fontFamily: 'LaylaThuluth',
+                  fontSize: 22,
+                  color: textColor,
+                ),
+              ),
+            ],
           ),
           centerTitle: true,
           actions: [
@@ -781,6 +818,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildContinueCard(Color cardColor, Color textColor, Color subColor) {
     return GestureDetector(
+      key: const Key('card_continue'),
       onTap: widget.onGoToReader,
       child: Container(
         padding: const EdgeInsets.all(16),
@@ -823,6 +861,7 @@ class _HomePageState extends State<HomePage> {
       bool isDark, Color cardColor, Color textColor, Color subColor) {
     if (_plan == null) {
       return GestureDetector(
+        key: const Key('card_wird_setup'),
         onTap: _showWirdSetup,
         child: Container(
           padding: const EdgeInsets.all(20),
@@ -913,6 +952,7 @@ class _HomePageState extends State<HomePage> {
             const Spacer(),
             if (!isDone)
               GestureDetector(
+                key: const Key('btn_read_now'),
                 onTap: widget.onGoToReader,
                 child: Container(
                   padding:
@@ -1027,8 +1067,8 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF2C2C2E) : Colors.white;
-    final textColor = isDark ? Colors.white : Colors.black87;
-    final subColor = isDark ? Colors.white60 : Colors.black54;
+    final textColor = isDark ? Colors.white : _tb87;
+    final subColor = isDark ? _tw60 : _tb54;
 
     final types = [
       ['pages', 'صفحات'],
@@ -1107,6 +1147,7 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
             ),
             const SizedBox(height: 16),
             Slider(
+              key: const Key('slider_wird'),
               value: _value.clamp(_min, _max),
               min: _min,
               max: _max,
@@ -1128,6 +1169,7 @@ class _WirdSetupSheetState extends State<_WirdSetupSheet> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
+                key: const Key('btn_wird_save'),
                 onPressed: _saving ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _goldColor,
@@ -1212,7 +1254,7 @@ class _AyahsPageState extends State<AyahsPage>
   Timer? _zoomBadgeTimer;
   Timer? _saveDebounce;
   bool _showTutorial = false; // true on first launch
-  int _speedLevel = 1; // 0 = slowest … 9 = fastest
+  int _speedLevel = 0; // 0 = slowest … 9 = fastest
   Ticker? _autoScrollTicker;
   Duration _lastTickElapsed = Duration.zero;
   // px per millisecond for each of the 10 speed levels (geometric, max unchanged)
@@ -1422,14 +1464,14 @@ class _AyahsPageState extends State<AyahsPage>
     }
     // marker(N) above viewport → page N+1 is at top; no marker → first loaded page.
     final currentPage = primPage != 0 ? primPage + 1 : _ayahs.first.page;
-    _currentPage =
-        currentPage; // track for session tracking (no rebuild needed)
     final suraName = _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
     final juz = _pageToJuz(currentPage);
-    if (suraName != _currentSuraName || juz != _currentJuz) {
+    if (suraName != _currentSuraName || juz != _currentJuz ||
+        currentPage != _currentPage) {
       setState(() {
         _currentSuraName = suraName;
         _currentJuz = juz;
+        _currentPage = currentPage;
       });
     }
   }
@@ -1721,11 +1763,22 @@ class _AyahsPageState extends State<AyahsPage>
         .toList();
   }
 
+  // Guard: FCM init must only happen once per process; calling requestPermission
+  // again while a prior call is pending throws a FirebaseException in tests.
+  static bool _fcmInitDone = false;
+
   Future<void> _initFcm() async {
-    final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission();
-    final token = await messaging.getToken();
-    debugPrint('[FCM] device token: $token');
+    if (_fcmInitDone) return;
+    _fcmInitDone = true;
+    try {
+      final messaging = FirebaseMessaging.instance;
+      await messaging.requestPermission();
+      final token = await messaging.getToken();
+      debugPrint('[FCM] device token: $token');
+    } catch (e) {
+      debugPrint('[FCM] init failed (emulator?): $e');
+      return;
+    }
     FirebaseMessaging.onMessage.listen((msg) {
       final n = msg.notification;
       if (n == null || !mounted) return;
@@ -2053,6 +2106,7 @@ class _AyahsPageState extends State<AyahsPage>
               orElse: () => ayahs.first);
           _currentSuraName = target.suraNameAr;
           _currentJuz = _pageToJuz(target.page);
+          _currentPage = target.page;
         }
         _reachedBottom = toPage >= 604;
         // Set singleton highlight to the navigated ayah.
@@ -2148,6 +2202,7 @@ class _AyahsPageState extends State<AyahsPage>
         }
         _navHeaderSuraNo = null;
         setState(() => _navigating = false);
+        _doSaveReadingPosition(); // persist current_page/sura now that navigation settled
         debugPrint(
             '[Navigate] Settled — overlay dismissed, highlight=$hlIdNow');
         // Safety re-pin 500ms later — use captured pin key (header or ayah).
@@ -2373,7 +2428,10 @@ class _AyahsPageState extends State<AyahsPage>
         ? Colors.white.withOpacity(0.07)
         : Colors.black.withOpacity(0.04);
     final dividerColor = isDark ? Colors.white24 : Colors.black12;
-    final headerTextColor = isDark ? Colors.white70 : Colors.black87;
+    final headerTextColor = isDark ? _tw70 : _tb87;
+    final edgeLineColor = isDark
+        ? const Color(0xFFC8A842).withValues(alpha: 0.38)
+        : const Color(0xFF8B6914).withValues(alpha: 0.28);
 
     if (_initialLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -2414,20 +2472,26 @@ class _AyahsPageState extends State<AyahsPage>
                     isDark: isDark,
                   ),
                   // CENTER title
-                  const Expanded(
-                    child: Text(
-                      'القرآن الكريم',
-                      textAlign: TextAlign.center,
+                  Expanded(
+                    child: Center(
+                      child: Image.asset(
+                        isDark
+                            ? 'assets/images/quran-type-white.png'
+                            : 'assets/images/quran-type.png',
+                        height: 26,
+                      ),
                     ),
                   ),
                   // RIGHT side
                   _barBtn(
+                    key: const Key('btn_nav'),
                     icon: Icons.menu_book_outlined,
                     tooltip: 'انتقل إلى',
                     onPressed: _showNavSheet,
                     isDark: isDark,
                   ),
                   _barBtn(
+                    key: const Key('btn_search'),
                     icon: Icons.search,
                     tooltip: 'بحث',
                     onPressed: _openSearch,
@@ -2455,11 +2519,12 @@ class _AyahsPageState extends State<AyahsPage>
                           _currentSuraName.isNotEmpty
                               ? 'سورة $_currentSuraName'
                               : '',
+                          key: const Key('text_topbar_surah'),
                           textAlign: TextAlign.center,
                           textDirection: TextDirection.rtl,
                           style: TextStyle(
                             fontSize: 12,
-                            color: isDark ? Colors.white54 : Colors.black54,
+                            color: isDark ? _tw54 : _tb54,
                             fontFamily: 'sans-serif',
                           ),
                         ),
@@ -2477,11 +2542,12 @@ class _AyahsPageState extends State<AyahsPage>
                       Expanded(
                         child: Text(
                           _currentJuz > 0 ? 'الجزء $_currentJuz' : '',
+                          key: const Key('text_topbar_juz'),
                           textAlign: TextAlign.center,
                           textDirection: TextDirection.rtl,
                           style: TextStyle(
                             fontSize: 12,
-                            color: isDark ? Colors.white54 : Colors.black54,
+                            color: isDark ? _tw54 : _tb54,
                           ),
                         ),
                       ),
@@ -2507,6 +2573,7 @@ class _AyahsPageState extends State<AyahsPage>
                 const SizedBox(width: 4),
                 // Play / Pause
                 _barBtn(
+                  key: const Key('btn_autoscroll'),
                   icon: _autoScrolling
                       ? Icons.pause_rounded
                       : Icons.play_arrow_rounded,
@@ -2525,6 +2592,7 @@ class _AyahsPageState extends State<AyahsPage>
                 const Spacer(),
                 // Speed control
                 _barBtn(
+                  key: const Key('btn_speed_down'),
                   icon: Icons.remove,
                   tooltip: 'أبطأ',
                   onPressed: _speedDown,
@@ -2534,14 +2602,16 @@ class _AyahsPageState extends State<AyahsPage>
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: Text(
                     '${_speedLevel + 1}',
+                    key: const Key('text_speed_level'),
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white70 : Colors.black87,
+                      color: isDark ? _tw70 : _tb87,
                     ),
                   ),
                 ),
                 _barBtn(
+                  key: const Key('btn_speed_up'),
                   icon: Icons.add,
                   tooltip: 'أسرع',
                   onPressed: _speedUp,
@@ -2614,7 +2684,9 @@ class _AyahsPageState extends State<AyahsPage>
                 }
               },
               onScaleEnd: (_) {}, // managed by Listener
-              child: NotificationListener<ScrollNotification>(
+              child: Stack(
+                children: [
+                  NotificationListener<ScrollNotification>(
                 onNotification: (n) {
                   // Track whether the user's finger is actively dragging so
                   // the auto-scroll ticker can yield to manual input.
@@ -2626,6 +2698,7 @@ class _AyahsPageState extends State<AyahsPage>
                   return false; // don't absorb — let _onScroll still fire
                 },
                 child: ListView.builder(
+                  key: const Key('ayah_list'),
                   controller: _scrollController,
                   // Disable scroll physics during pinch so the ListView yields
                   // pointer events to the parent ScaleGestureRecognizer.
@@ -2659,7 +2732,7 @@ class _AyahsPageState extends State<AyahsPage>
                                   'سورة ${item.suraNameAr}',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    fontSize: 20,
+                                    fontSize: 20 * _fontScale,
                                     fontWeight: FontWeight.bold,
                                     color: headerTextColor,
                                     fontFamily: 'sans-serif',
@@ -2712,9 +2785,7 @@ class _AyahsPageState extends State<AyahsPage>
                                   '${item.page}',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: isDark
-                                        ? Colors.white38
-                                        : Colors.black38,
+                                    color: isDark ? _tw38 : _tb38,
                                   ),
                                 ),
                               ),
@@ -2785,6 +2856,28 @@ class _AyahsPageState extends State<AyahsPage>
                   },
                 ), // closes ListView.builder
               ), // closes NotificationListener
+              // ── Page edge lines (3 thin lines, side switches per page parity) ──
+              Positioned(
+                top: 0,
+                bottom: 0,
+                right: _currentPage.isOdd ? 4 : null,
+                left: _currentPage.isOdd ? null : 4,
+                width: 11,
+                child: IgnorePointer(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(width: 1, color: edgeLineColor),
+                      const SizedBox(width: 4),
+                      Container(width: 1, color: edgeLineColor),
+                      const SizedBox(width: 4),
+                      Container(width: 1, color: edgeLineColor),
+                    ],
+                  ),
+                ),
+              ),
+            ], // closes inner Stack.children
+          ), // closes inner Stack
             ), // closes GestureDetector
           ), // closes Listener
           // ── Zoom badge ─────────────────────────────────────────────
@@ -2867,6 +2960,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                 children: [
                                                   Expanded(
                                                     child: TextField(
+                                                      key: const Key('field_search'),
                                                       controller: _searchCtrl,
                                                       autofocus: true,
                                                       textDirection:
@@ -2874,7 +2968,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                       style: TextStyle(
                                                         color: isDark
                                                             ? Colors.white
-                                                            : Colors.black87,
+                                                            : _tb87,
                                                         fontSize: 16,
                                                       ),
                                                       decoration:
@@ -2882,9 +2976,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                         hintText:
                                                             'ابحث في القرآن الكريم...',
                                                         hintStyle: TextStyle(
-                                                          color: isDark
-                                                              ? Colors.white38
-                                                              : Colors.black38,
+                                                          color: isDark ? _tw38 : _tb38,
                                                         ),
                                                         border:
                                                             InputBorder.none,
@@ -2899,9 +2991,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                   ),
                                                   IconButton(
                                                     icon: Icon(Icons.close,
-                                                        color: isDark
-                                                            ? Colors.white54
-                                                            : Colors.black45),
+                                                        color: isDark ? _tw54 : _tb45),
                                                     onPressed: _closeSearch,
                                                   ),
                                                 ],
@@ -2929,9 +3019,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                   child: Text(
                                                     'لا توجد نتائج',
                                                     style: TextStyle(
-                                                      color: isDark
-                                                          ? Colors.white38
-                                                          : Colors.black38,
+                                                      color: isDark ? _tw38 : _tb38,
                                                     ),
                                                   ),
                                                 ),
@@ -2957,6 +3045,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                             .clamp(40.0, 360.0),
                                                   ),
                                                   child: ListView.separated(
+                                                    key: const Key('list_search_results'),
                                                     shrinkWrap: true,
                                                     itemCount:
                                                         _searchResults.length,
@@ -3181,7 +3270,7 @@ class _TutorialCard extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 14,
-              color: Colors.white.withValues(alpha: 0.85),
+              color: _tw85,
               height: 1.7,
             ),
           ),
@@ -3358,7 +3447,7 @@ class _NavSheetState extends State<_NavSheet> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final borderColor = isDark ? Colors.white24 : Colors.black12;
     final labelStyle =
-        TextStyle(color: isDark ? Colors.white70 : Colors.black87);
+        TextStyle(color: isDark ? _tw70 : _tb87);
     final modeLabels = ['صفحة', 'سورة', 'جزء', 'آية'];
 
     return Padding(
@@ -3415,7 +3504,7 @@ class _NavSheetState extends State<_NavSheet> {
                         style: TextStyle(
                           color: selected
                               ? Colors.white
-                              : (isDark ? Colors.white70 : Colors.black87),
+                              : (isDark ? _tw70 : _tb87),
                           fontWeight:
                               selected ? FontWeight.bold : FontWeight.normal,
                         ),
@@ -3435,6 +3524,7 @@ class _NavSheetState extends State<_NavSheet> {
                 children: [
                   Expanded(
                     child: TextField(
+                      key: const Key('field_page'),
                       controller: _pageCtrl,
                       focusNode: _pageFocus,
                       keyboardType: TextInputType.number,
@@ -3479,6 +3569,7 @@ class _NavSheetState extends State<_NavSheet> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                         child: TextField(
+                          key: const Key('field_surah_search'),
                           controller: _surahSearchCtrl,
                           focusNode: _surahSearchFocus,
                           textDirection: TextDirection.rtl,
@@ -3487,7 +3578,7 @@ class _NavSheetState extends State<_NavSheet> {
                             hintText: 'ابحث عن سورة...',
                             hintStyle: TextStyle(
                                 color:
-                                    isDark ? Colors.white38 : Colors.black38),
+                                    isDark ? _tw38 : _tb38),
                             prefixIcon: const Icon(Icons.search),
                             border: const OutlineInputBorder(),
                             isDense: true,
@@ -3502,10 +3593,9 @@ class _NavSheetState extends State<_NavSheet> {
                             ? Center(
                                 child: Text('لا نتائج',
                                     style: TextStyle(
-                                        color: isDark
-                                            ? Colors.white38
-                                            : Colors.black38)))
+                                        color: isDark ? _tw38 : _tb38)))
                             : ListView.builder(
+                                key: const Key('list_surah'),
                                 itemCount: _filteredSurahs.length,
                                 itemBuilder: (ctx, i) {
                                   final s = _filteredSurahs[i];
@@ -3513,20 +3603,14 @@ class _NavSheetState extends State<_NavSheet> {
                                     dense: true,
                                     leading: Text('${s.no}',
                                         style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white38
-                                                : Colors.black38,
+                                            color: isDark ? _tw38 : _tb38,
                                             fontSize: 12)),
                                     title: Text(s.nameAr,
                                         style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white
-                                                : Colors.black87)),
+                                            color: isDark ? Colors.white : _tb87)),
                                     trailing: Text('${s.ayaCount} آية',
                                         style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white38
-                                                : Colors.black38,
+                                            color: isDark ? _tw38 : _tb38,
                                             fontSize: 12)),
                                     onTap: () => _goToSurah(s.no),
                                   );
@@ -3540,6 +3624,7 @@ class _NavSheetState extends State<_NavSheet> {
             SizedBox(
               height: 300,
               child: ListView.builder(
+                key: const Key('list_juz'),
                 itemCount: 30,
                 itemBuilder: (ctx, i) {
                   final juzNo = i + 1;
@@ -3549,7 +3634,7 @@ class _NavSheetState extends State<_NavSheet> {
                     leading: Text(
                       '$juzNo',
                       style: TextStyle(
-                        color: isDark ? Colors.white38 : Colors.black38,
+                        color: isDark ? _tw38 : _tb38,
                         fontSize: 12,
                       ),
                     ),
@@ -3557,14 +3642,14 @@ class _NavSheetState extends State<_NavSheet> {
                       'الجزء $juzNo',
                       textDirection: TextDirection.rtl,
                       style: TextStyle(
-                        color: isDark ? Colors.white : Colors.black87,
+                        color: isDark ? Colors.white : _tb87,
                       ),
                     ),
                     trailing: Text(
                       'صفحة $page',
                       textDirection: TextDirection.rtl,
                       style: TextStyle(
-                        color: isDark ? Colors.white38 : Colors.black38,
+                        color: isDark ? _tw38 : _tb38,
                         fontSize: 12,
                       ),
                     ),
@@ -3584,6 +3669,7 @@ class _NavSheetState extends State<_NavSheet> {
                     child: Column(
                       children: [
                         DropdownButtonFormField<int>(
+                          key: const Key('dropdown_surah'),
                           value: _selectedSurahNo,
                           decoration: InputDecoration(
                             labelText: 'السورة',
@@ -3606,6 +3692,7 @@ class _NavSheetState extends State<_NavSheet> {
                           children: [
                             Expanded(
                               child: TextField(
+                                key: const Key('field_ayah'),
                                 controller: _ayaNoCtrl,
                                 keyboardType: TextInputType.number,
                                 textAlign: TextAlign.center,
