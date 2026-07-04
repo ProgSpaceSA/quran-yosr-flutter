@@ -53,6 +53,8 @@ flutter_launcher_icons:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
   flutter_launcher_icons: ^0.14.4
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -81,6 +83,9 @@ flutter:
     - family: CustomFont
       fonts:
         - asset: assets/fonts/HafsSmart_08.ttf
+    - family: LaylaThuluth
+      fonts:
+        - asset: assets/fonts/LaylaThuluth.ttf
     - family: Rubik
       fonts:
         - asset: assets/fonts/Rubik-Regular.ttf

@@ -1217,6 +1217,31 @@ class AyahsPage extends StatefulWidget {
   State<AyahsPage> createState() => _AyahsPageState();
 }
 
+// Draws 3 thin vertical lines on the right (odd pages) or left (even pages)
+// edge of each _AyahRun item, mimicking the Quran book page-edge decoration.
+class _PageEdgePainter extends CustomPainter {
+  final bool isOdd;
+  final Color color;
+  const _PageEdgePainter(this.isOdd, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2;
+    final xs = isOdd
+        ? [size.width - 2, size.width - 5, size.width - 8]
+        : [2.0, 5.0, 8.0];
+    for (final x in xs) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PageEdgePainter old) =>
+      old.isOdd != isOdd || old.color != color;
+}
+
 class _AyahsPageState extends State<AyahsPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   final List<Ayah> _ayahs = [];
@@ -1464,14 +1489,13 @@ class _AyahsPageState extends State<AyahsPage>
     }
     // marker(N) above viewport → page N+1 is at top; no marker → first loaded page.
     final currentPage = primPage != 0 ? primPage + 1 : _ayahs.first.page;
+    _currentPage = currentPage;
     final suraName = _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
     final juz = _pageToJuz(currentPage);
-    if (suraName != _currentSuraName || juz != _currentJuz ||
-        currentPage != _currentPage) {
+    if (suraName != _currentSuraName || juz != _currentJuz) {
       setState(() {
         _currentSuraName = suraName;
         _currentJuz = juz;
-        _currentPage = currentPage;
       });
     }
   }
@@ -2684,9 +2708,7 @@ class _AyahsPageState extends State<AyahsPage>
                 }
               },
               onScaleEnd: (_) {}, // managed by Listener
-              child: Stack(
-                children: [
-                  NotificationListener<ScrollNotification>(
+              child: NotificationListener<ScrollNotification>(
                 onNotification: (n) {
                   // Track whether the user's finger is actively dragging so
                   // the auto-scroll ticker can yield to manual input.
@@ -2842,12 +2864,18 @@ class _AyahsPageState extends State<AyahsPage>
                       }
                       final runKey = _runKeyCache.putIfAbsent(
                           item.ayahs.first.id, GlobalKey.new);
-                      return KeyedSubtree(
-                        key: runKey,
-                        child: Wrap(
-                          textDirection: TextDirection.rtl,
-                          alignment: WrapAlignment.center,
-                          children: wordWidgets,
+                      return CustomPaint(
+                        foregroundPainter: _PageEdgePainter(
+                          item.ayahs.first.page.isOdd,
+                          edgeLineColor,
+                        ),
+                        child: KeyedSubtree(
+                          key: runKey,
+                          child: Wrap(
+                            textDirection: TextDirection.rtl,
+                            alignment: WrapAlignment.center,
+                            children: wordWidgets,
+                          ),
                         ),
                       );
                     }
@@ -2856,28 +2884,6 @@ class _AyahsPageState extends State<AyahsPage>
                   },
                 ), // closes ListView.builder
               ), // closes NotificationListener
-              // ── Page edge lines (3 thin lines, side switches per page parity) ──
-              Positioned(
-                top: 0,
-                bottom: 0,
-                right: _currentPage.isOdd ? 4 : null,
-                left: _currentPage.isOdd ? null : 4,
-                width: 11,
-                child: IgnorePointer(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(width: 1, color: edgeLineColor),
-                      const SizedBox(width: 4),
-                      Container(width: 1, color: edgeLineColor),
-                      const SizedBox(width: 4),
-                      Container(width: 1, color: edgeLineColor),
-                    ],
-                  ),
-                ),
-              ),
-            ], // closes inner Stack.children
-          ), // closes inner Stack
             ), // closes GestureDetector
           ), // closes Listener
           // ── Zoom badge ─────────────────────────────────────────────
