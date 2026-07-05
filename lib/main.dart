@@ -1230,8 +1230,8 @@ class _PageEdgePainter extends CustomPainter {
       ..color = color
       ..strokeWidth = 1.2;
     final xs = isOdd
-        ? [size.width - 2, size.width - 5, size.width - 8]
-        : [2.0, 5.0, 8.0];
+        ? [size.width - 1, size.width - 4, size.width - 7]
+        : [1.0, 4.0, 7.0];
     for (final x in xs) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }
@@ -1257,7 +1257,7 @@ class _AyahsPageState extends State<AyahsPage>
 
   int _minId = 0;
   int _maxId = 0;
-  static const int _chunk = 30;
+  static const int _chunk = 80;
 
   double _fontScale = 1.0;
   double _baseFontScale = 1.0;
@@ -1310,6 +1310,7 @@ class _AyahsPageState extends State<AyahsPage>
   // Keys for each rendered _PageMarker, keyed by marker's page number.
   // Used to detect which page top is at the viewport top.
   final Map<int, GlobalKey> _pageMarkerKeyCache = {};
+  int _lastTitleUpdateMs = 0;
   final Map<int, GlobalKey> _surahHeaderKeyCache = {};
   int? _navHeaderSuraNo; // when set, pin to surah header instead of first ayah
   // First surah name seen on each Mushaf page (built from _ayahs).
@@ -1468,6 +1469,9 @@ class _AyahsPageState extends State<AyahsPage>
   /// above viewport top (topOnScreen ≤ 0) the visible page is N+1.
   void _updateTitleBarFromViewport() {
     if (!_scrollController.hasClients || _ayahs.isEmpty) return;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - _lastTitleUpdateMs < 100) return;
+    _lastTitleUpdateMs = nowMs;
     final pos = _scrollController.position;
     // Find marker with the largest topOnScreen ≤ 0 (last one to scroll above top).
     int primPage = 0;
@@ -1745,7 +1749,7 @@ class _AyahsPageState extends State<AyahsPage>
 
     if (!_loadingMore &&
         !_reachedBottom &&
-        pos.pixels >= pos.maxScrollExtent - 400) {
+        pos.pixels >= pos.maxScrollExtent - 1500) {
       debugPrint('[Scroll] Near bottom → _loadMore');
       _loadMore();
     }
@@ -1982,7 +1986,11 @@ class _AyahsPageState extends State<AyahsPage>
         _recomputeItems();
         if (ayahs.isNotEmpty) _maxId = ayahs.last.id;
         _reachedBottom = ayahs.length < _chunk;
-        _loadingMore = false;
+      });
+      // Reset flag after the next frame so the layout-triggered scroll
+      // notification sees _loadingMore=true and doesn't double-fire.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _loadingMore = false);
       });
       if (_reachedBottom) debugPrint('[LoadMore] Reached bottom of Quran');
     } catch (e) {
@@ -2288,7 +2296,7 @@ class _AyahsPageState extends State<AyahsPage>
       // so explicitly trigger a load when we're near the end of loaded content.
       if (!_loadingMore &&
           !_reachedBottom &&
-          pos.pixels >= pos.maxScrollExtent - 800) {
+          pos.pixels >= pos.maxScrollExtent - 1500) {
         _loadMore();
       }
     })
@@ -2454,8 +2462,8 @@ class _AyahsPageState extends State<AyahsPage>
     final dividerColor = isDark ? Colors.white24 : Colors.black12;
     final headerTextColor = isDark ? _tw70 : _tb87;
     final edgeLineColor = isDark
-        ? const Color(0xFFC8A842).withValues(alpha: 0.38)
-        : const Color(0xFF8B6914).withValues(alpha: 0.28);
+        ? const Color(0xFFC8A842).withValues(alpha: 0.20)
+        : const Color(0xFF8B6914).withValues(alpha: 0.15);
 
     if (_initialLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -2730,7 +2738,7 @@ class _AyahsPageState extends State<AyahsPage>
                   // Larger cache ensures more back-buffer items are measured before
                   // correctBy fires, giving it a more accurate delta to work with.
                   cacheExtent: 1500,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                  padding: const EdgeInsets.fromLTRB(0, 8, 0, 100),
                   itemCount: _items.length,
                   itemBuilder: (context, index) {
                     final item = _items[index];
@@ -2741,7 +2749,9 @@ class _AyahsPageState extends State<AyahsPage>
                         key: _surahHeaderKeyCache.putIfAbsent(
                             item.suraNo, GlobalKey.new),
                         child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 12),
+                          margin: const EdgeInsets.fromLTRB(0, 12, 0, 12),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 16),
                           color: headerBg,
                           child: Column(
                             children: [
@@ -2772,7 +2782,7 @@ class _AyahsPageState extends State<AyahsPage>
                     // ── Basmala line (aya 1, surahs 2-8 and 10-114) ──────
                     if (item is _BasmalaItem) {
                       return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                         child: Text(
                           item.text,
                           textAlign: TextAlign.center,
@@ -2794,7 +2804,8 @@ class _AyahsPageState extends State<AyahsPage>
                       return KeyedSubtree(
                         key: markerKey,
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 10, 16, 10),
                           child: Row(
                             children: [
                               Expanded(
@@ -2869,12 +2880,16 @@ class _AyahsPageState extends State<AyahsPage>
                           item.ayahs.first.page.isOdd,
                           edgeLineColor,
                         ),
-                        child: KeyedSubtree(
-                          key: runKey,
-                          child: Wrap(
-                            textDirection: TextDirection.rtl,
-                            alignment: WrapAlignment.center,
-                            children: wordWidgets,
+                        child: Padding(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 16),
+                          child: KeyedSubtree(
+                            key: runKey,
+                            child: Wrap(
+                              textDirection: TextDirection.rtl,
+                              alignment: WrapAlignment.center,
+                              children: wordWidgets,
+                            ),
                           ),
                         ),
                       );

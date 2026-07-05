@@ -23,7 +23,7 @@
 | Phase | Status |
 |---|---|
 | Phase 1 — Stability and Reading Core | ✅ Done |
-| Phase 2 — Daily Wird and Habit System | 🔄 In progress |
+| Phase 2 — Daily Wird and Habit System | ✅ Done (core); Phase 2b deferred |
 | Phase 3 — Organization | ⬜ Not started |
 | Phase 4 — Memorization | ⬜ Not started |
 | Phase 5 — Ramadan Features | ⬜ Not started |
@@ -45,8 +45,8 @@ The app should not feel like a generic book reader only. It should feel like an 
 
 - [x] Improve the Quran reading experience.
 - [x] Fix and enhance reading-position management.
-- [ ] Help users build a daily Quran habit.
-- [ ] Support daily wird and khatmah planning.
+- [x] Help users build a daily Quran habit.
+- [~] Support daily wird and khatmah planning. *(wird done; khatmah planning deferred)*
 - [ ] Add memorization and revision tools.
 - [x] Keep the app simple, clean, and distraction-free.
 - [ ] Prepare the foundation for future sync, Ramadan plans, tafsir, and advanced features.
@@ -64,8 +64,8 @@ The app should remain lightweight and easy to use. Avoid unnecessary complexity.
 Most user data should be stored locally first:
 
 - [x] Reading position
-- [ ] Wird target
-- [ ] Streaks
+- [x] Wird target *(user_data.db — wird_plan table)*
+- [x] Streaks *(user_data.db — daily_progress table)*
 - [ ] Bookmarks
 - [ ] Notes
 - [x] Preferences *(font size, theme mode)*
@@ -108,15 +108,15 @@ The app must accurately save and restore the user's reading position.
 
 ---
 
-## 4.2 Returning Mechanism — ⬜ Not started
+## 4.2 Returning Mechanism — ✅ Done
 
 Add a clear "Continue Reading" mechanism.
 
 ### Requirements
 
-- [ ] Show "Continue Reading" on home screen.
-- [ ] Display last surah and ayah.
-- [ ] One tap returns to exact position.
+- [x] Show "Continue Reading" on home screen.
+- [x] Display last surah and ayah.
+- [x] One tap returns to exact position. *(switches to reader tab; position already saved)*
 - [ ] Support multiple auto-saved reading positions later.
 
 ### Example
@@ -193,44 +193,44 @@ Save locally:
 
 ---
 
-# 5. Daily Reading Features — ⬜ Not started
+# 5. Daily Reading Features — 🔄 Partial
 
-## 5.1 Daily Reading Program
+## 5.1 Daily Reading Program — ✅ Done
 
 A daily reading program helps the user build a fixed Quran habit.
 
 ### Requirements
 
-- [ ] User can create a daily Quran reading target.
-- [ ] User can choose based on:
+- [x] User can create a daily Quran reading target.
+- [x] User can choose based on:
 
-  - [ ] Number of pages
-  - [ ] Number of ayahs
-  - [ ] Time duration
+  - [x] Number of pages
+  - [x] Number of ayahs
+  - [x] Time duration
   - [ ] Khatmah goal
-- [ ] The app shows today's reading target.
-- [ ] User can mark the target as completed.
-- [ ] The app saves daily completion history.
+- [x] The app shows today's reading target.
+- [x] User can mark the target as completed. *(auto-completed via session tracking)*
+- [x] The app saves daily completion history. *(daily_progress table in user_data.db)*
 
 ---
 
-## 5.2 Daily Wird Target
+## 5.2 Daily Wird Target — ✅ Done
 
 The daily wird target should be private and local by default.
 
 ### Requirements
 
-- [ ] User can set a daily target.
-- [ ] No account required.
-- [ ] Data saved locally.
-- [ ] User can edit target anytime.
-- [ ] App should show progress for today.
+- [x] User can set a daily target.
+- [x] No account required.
+- [x] Data saved locally. *(user_data.db)*
+- [x] User can edit target anytime. *(tap wird card → setup sheet)*
+- [x] App should show progress for today. *(progress bar on home screen)*
 
 ### Target Types
 
-- [ ] Read X pages per day
-- [ ] Read X ayahs per day
-- [ ] Read for X minutes per day
+- [x] Read X pages per day
+- [x] Read X ayahs per day
+- [x] Read for X minutes per day
 - [ ] Finish Quran by a target date
 
 ---
@@ -263,17 +263,17 @@ Avoid harsh language:
 
 ---
 
-## 5.4 Progress Tracking
+## 5.4 Progress Tracking — 🔄 Partial
 
 ### Requirements
 
 Track:
 
-- [ ] Daily completion
-- [ ] Pages read
-- [ ] Ayahs read
-- [ ] Current khatmah progress
-- [ ] Reading streak
+- [x] Daily completion *(is_completed flag in daily_progress)*
+- [x] Pages read *(pages_read per session, summed into daily_progress)*
+- [~] Ayahs read *(tracked per session; not yet surfaced in UI)*
+- [~] Current khatmah progress *(shown as % of Quran on home screen)*
+- [x] Reading streak *(calculateStreak() — consecutive completed days)*
 - [ ] Missed days
 - [ ] Recovery status
 
@@ -295,13 +295,13 @@ Body: A small reading today keeps your Quran habit alive.
 
 ---
 
-## 5.6 Reading Streak
+## 5.6 Reading Streak — ✅ Done
 
 ### Requirements
 
-- [ ] Count consecutive days completed.
-- [ ] Show streak on dashboard.
-- [ ] Streak should be motivating, not stressful.
+- [x] Count consecutive days completed.
+- [x] Show streak on dashboard.
+- [x] Streak should be motivating, not stressful.
 - [ ] Allow grace/recovery logic later.
 
 ---
@@ -648,16 +648,16 @@ Provide simple reading themes:
 
 ---
 
-## 9.6 Reading Goal Dashboard — ⬜ Not started
+## 9.6 Reading Goal Dashboard — 🔄 Partial
 
 ### Requirements
 
 Home screen should show:
 
-- [ ] Continue Reading
-- [ ] Today's Wird
-- [ ] Current streak
-- [ ] Khatmah progress
+- [x] Continue Reading *(card with last surah + page; taps to reader)*
+- [x] Today's Wird *(progress bar; "0 من X" → "أتممت وردك اليوم" on complete)*
+- [x] Current streak *(🔥 N أيام)*
+- [~] Khatmah progress *(shown as % of Quran read)*
 - [ ] Memorization target
 - [ ] Quick access to bookmarks
 
@@ -774,41 +774,39 @@ Suggested local entities:
 
 ---
 
-## ReadingSession — ⬜ Not started
+## ReadingSession — ✅ Done
 
-- [ ] id
-- [ ] startedAt
-- [ ] endedAt
-- [ ] startSurah / startAyah
-- [ ] endSurah / endAyah
-- [ ] pagesRead
-- [ ] ayahsRead
-- [ ] durationSeconds
-- [ ] completedDailyTarget
-- [ ] createdAt
+- [x] id
+- [x] startedAt / endedAt
+- [x] startAyahId / endAyahId
+- [x] startPage / endPage
+- [x] pagesRead
+- [x] durationSeconds
+- [ ] ayahsRead *(tracked but not stored separately)*
+- [ ] completedDailyTarget *(inferred at query time)*
+- [x] createdAt *(date TEXT)*
 
 ---
 
-## DailyWirdPlan — ⬜ Not started
+## DailyWirdPlan — ✅ Done
 
-- [ ] id
-- [ ] targetType: pages | ayahs | minutes | khatmah
-- [ ] targetValue
-- [ ] startDate / endDate
-- [ ] isActive
+- [x] id
+- [x] targetType: pages | ayahs | minutes
+- [x] targetValue
+- [ ] startDate / endDate *(not stored; plan is open-ended)*
+- [x] isActive
 - [ ] recoveryMode
-- [ ] createdAt / updatedAt
+- [x] createdAt
 
 ---
 
-## DailyWirdProgress — ⬜ Not started
+## DailyWirdProgress — ✅ Done
 
-- [ ] id
-- [ ] date
-- [ ] planId
-- [ ] targetValue / completedValue
-- [ ] isCompleted / completedAt
-- [ ] createdAt
+- [x] date *(PRIMARY KEY — YYYY-MM-DD)*
+- [x] planId
+- [x] completedValue
+- [x] isCompleted / completedAt
+- [ ] id / createdAt *(date is the key; no separate id)*
 
 ---
 
@@ -879,14 +877,14 @@ Suggested local entities:
 
 # 12. Main Screens
 
-## 12.1 Home Screen — ⬜ Not started
+## 12.1 Home Screen — 🔄 Partial
 
 Sections:
 
-- [ ] Continue Reading
-- [ ] Today's Wird
-- [ ] Current Streak
-- [ ] Khatmah Progress
+- [x] Continue Reading *(card_continue — last surah + page)*
+- [x] Today's Wird *(progress bar + اقرأ الآن button)*
+- [x] Current Streak
+- [~] Khatmah Progress *(% shown; no dedicated screen yet)*
 - [ ] Memorization Target
 - [ ] Bookmarks Shortcut
 
@@ -930,15 +928,15 @@ Features:
 
 ---
 
-## 12.5 Daily Wird Screen — ⬜ Not started
+## 12.5 Daily Wird Screen — 🔄 Partial
 
 Features:
 
-- [ ] Create/edit daily target
-- [ ] Show today's progress
-- [ ] Mark as complete
+- [x] Create/edit daily target *(modal bottom sheet — _WirdSetupSheet)*
+- [x] Show today's progress *(home screen card)*
+- [x] Mark as complete *(auto via session tracking)*
 - [ ] Show recovery options
-- [ ] Show streak
+- [x] Show streak
 
 ---
 
@@ -1047,16 +1045,16 @@ Use a reliable local database/storage layer suitable for the current app stack.
 
 Suggested options:
 
-- [x] SQLite *(used for Quran text; not yet used for user data)*
-- [ ] Hive or Isar *(for user data: bookmarks, notes, wird progress, memorization)*
-- [x] SharedPreferences *(for simple preferences: font size)*
+- [x] SQLite *(quran.db for Quran text; user_data.db for user data via UserDb singleton)*
+- [ ] Hive or Isar *(not needed; SQLite used for all structured data)*
+- [x] SharedPreferences *(for simple preferences: font size, theme, reading position)*
 
 Use database storage for:
 
 - [ ] Bookmarks
 - [ ] Notes
 - [ ] Reading history
-- [ ] Wird progress
+- [x] Wird progress *(daily_progress table)*
 - [ ] Memorization progress
 
 Use simple preferences for:
@@ -1098,14 +1096,18 @@ Even if sync is not implemented now, local entities should use stable IDs and ti
 
 ---
 
-## Phase 2 - Daily Wird and Habit System — 🔄 In progress
+## Phase 2 - Daily Wird and Habit System — ✅ Done (core)
 
+- [x] Home dashboard — 2-tab shell (_AppShell); starts on Home, switches to reader if plan exists
 - [x] Daily reading program — session tracking (start/end on tab switch & lifecycle)
 - [x] Daily wird target — pages / ayahs / minutes via _WirdSetupSheet
 - [x] Progress tracking — daily_progress table; home screen progress bar
-- [ ] Daily reminder — deferred to Phase 2b (needs flutter_local_notifications)
 - [x] Reading streak — calculateStreak() with consecutive-day logic
-- [ ] Missed-day recovery — deferred to Phase 2b (needs streak history data)
+- [x] Continue Reading — card_continue shows last surah + page; one tap to reader
+- [x] Page-edge decoration — 3 thin lines per page side (odd=right, even=left), Quran aesthetic
+- [x] Integration test suite — 74 tests (flutter integration_test) covering all core flows
+- [ ] Daily reminder — deferred to Phase 2b (needs flutter_local_notifications)
+- [ ] Missed-day recovery — deferred to Phase 2b
 - [ ] Flexible schedule — deferred to Phase 2b
 
 ---
@@ -1163,9 +1165,10 @@ The first release should focus on:
 - [x] Reading-position/session fixes
 - [x] Continue Reading — home screen card; switches to reader tab
 - [x] Daily wird target — _WirdSetupSheet; pages / ayahs / minutes
-- [ ] Daily reminder — deferred Phase 2b
 - [x] Progress tracking — daily_progress upserted per session
 - [x] Reading streak — calculateStreak() on home screen
+- [x] Integration test suite — 74 tests on real device
+- [ ] Daily reminder — deferred Phase 2b
 - [ ] Bookmarks
 - [ ] Favorites
 - [ ] Notes
