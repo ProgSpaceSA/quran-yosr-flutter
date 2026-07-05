@@ -236,6 +236,13 @@ class SearchResult {
   });
 }
 
+class SurahHit {
+  final int suraNo;
+  final String nameAr;
+  final int firstAyahId;
+  const SurahHit({required this.suraNo, required this.nameAr, required this.firstAyahId});
+}
+
 // ── User data models ──────────────────────────────────────────────────────
 
 class WirdPlan {
@@ -554,6 +561,7 @@ class _AppShellState extends State<_AppShell> {
   int _selectedTab =
       0; // 0=home, 1=reader; starts on home, switches to reader if plan exists
   bool _isAutoScrolling = false;
+  bool _isFocusMode = false;
 
   final _homeKey = GlobalKey<_HomePageState>();
 
@@ -595,13 +603,14 @@ class _AppShellState extends State<_AppShell> {
             onToggleTheme: widget.onToggleTheme,
             isActiveTab: _selectedTab == 1,
             onAutoScrollChanged: (v) => setState(() => _isAutoScrolling = v),
+            onFocusModeChanged: (v) => setState(() => _isFocusMode = v),
           ),
         ],
       ),
       bottomNavigationBar: AnimatedContainer(
         duration: const Duration(milliseconds: 320),
         curve: Curves.easeInOut,
-        height: (_isAutoScrolling && _selectedTab == 1)
+        height: ((_isAutoScrolling || _isFocusMode) && _selectedTab == 1)
             ? 0.0
             : 60.0 + MediaQuery.of(context).viewPadding.bottom,
         clipBehavior: Clip.hardEdge,
@@ -1204,6 +1213,7 @@ class AyahsPage extends StatefulWidget {
   final VoidCallback onToggleTheme;
   final bool isActiveTab;
   final ValueChanged<bool>? onAutoScrollChanged;
+  final ValueChanged<bool>? onFocusModeChanged;
 
   const AyahsPage({
     super.key,
@@ -1211,6 +1221,7 @@ class AyahsPage extends StatefulWidget {
     required this.onToggleTheme,
     this.isActiveTab = true,
     this.onAutoScrollChanged,
+    this.onFocusModeChanged,
   });
 
   @override
@@ -1265,9 +1276,11 @@ class _AyahsPageState extends State<AyahsPage>
   bool _showSearch = false;
   final _searchCtrl = TextEditingController();
   List<SearchResult> _searchResults = [];
+  List<SurahHit> _surahHits = [];
   bool _searching = false;
 
   bool _autoScrolling = false;
+  bool _focusMode = false;
   bool _userDragging = false; // true while finger is actively dragging
   bool _isPinching = false; // true during 2-finger pinch-to-zoom
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
@@ -2286,6 +2299,7 @@ class _AyahsPageState extends State<AyahsPage>
     setState(() {
       _showSearch = true;
       _searchResults = [];
+      _surahHits = [];
       _searchCtrl.clear();
     });
   }
@@ -2339,12 +2353,19 @@ class _AyahsPageState extends State<AyahsPage>
   void _toggleAutoScroll() =>
       _autoScrolling ? _stopAutoScroll() : _startAutoScroll();
 
+  void _toggleFocusMode() {
+    setState(() => _focusMode = !_focusMode);
+    widget.onFocusModeChanged?.call(_focusMode);
+  }
+
   void _speedDown() {
     if (_speedLevel > 0) setState(() => _speedLevel--);
+    if (!_autoScrolling) _startAutoScroll();
   }
 
   void _speedUp() {
     if (_speedLevel < 9) setState(() => _speedLevel++);
+    if (!_autoScrolling) _startAutoScroll();
   }
 
   Future<void> _checkTutorial() async {
@@ -2360,23 +2381,39 @@ class _AyahsPageState extends State<AyahsPage>
   }
 
   Future<void> _doSearch(String query) async {
-    if (query.length < 3) {
+    if (query.length < 2) {
       setState(() {
         _searchResults = [];
+        _surahHits = [];
         _searching = false;
       });
       return;
     }
     setState(() => _searching = true);
     final db = await _openDb();
-    final rows = await db.rawQuery(
-      'SELECT id, sura_no, aya_no, sura_name_ar, aya_text_emlaey '
-      'FROM quran_ayahs WHERE aya_text_emlaey LIKE ? ORDER BY id LIMIT 20',
+    final surahRows = await db.rawQuery(
+      'SELECT sura_no, sura_name_ar, MIN(id) as first_id '
+      'FROM quran_ayahs WHERE sura_name_ar LIKE ? GROUP BY sura_no ORDER BY sura_no',
       ['%$query%'],
     );
+    List<Map<String, Object?>> ayahRows = [];
+    if (query.length >= 3) {
+      ayahRows = await db.rawQuery(
+        'SELECT id, sura_no, aya_no, sura_name_ar, aya_text_emlaey '
+        'FROM quran_ayahs WHERE aya_text_emlaey LIKE ? ORDER BY id LIMIT 20',
+        ['%$query%'],
+      );
+    }
     await db.close();
     setState(() {
-      _searchResults = rows
+      _surahHits = surahRows
+          .map((r) => SurahHit(
+                suraNo: r['sura_no'] as int,
+                nameAr: r['sura_name_ar'] as String,
+                firstAyahId: r['first_id'] as int,
+              ))
+          .toList();
+      _searchResults = ayahRows
           .map((r) => SearchResult(
                 id: r['id'] as int,
                 suraNo: r['sura_no'] as int,
@@ -2499,13 +2536,13 @@ class _AyahsPageState extends State<AyahsPage>
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(
-          _autoScrolling ? 0 : kToolbarHeight + 30.0,
+          (_autoScrolling || _focusMode) ? 0 : kToolbarHeight + 30.0,
         ),
         child: ClipRect(
           child: AnimatedSlide(
             duration: const Duration(milliseconds: 320),
             curve: Curves.easeInOut,
-            offset: _autoScrolling ? const Offset(0, -1) : Offset.zero,
+            offset: (_autoScrolling || _focusMode) ? const Offset(0, -1) : Offset.zero,
             child: AppBar(
               automaticallyImplyLeading: false,
               titleSpacing: 0,
@@ -2615,7 +2652,11 @@ class _AyahsPageState extends State<AyahsPage>
           ), // AnimatedSlide
         ), // ClipRect
       ), // PreferredSize
-      bottomNavigationBar: Container(
+      bottomNavigationBar: AnimatedContainer(
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeInOut,
+        height: _focusMode ? 0.0 : 56.0 + MediaQuery.of(context).viewPadding.bottom,
+        clipBehavior: Clip.hardEdge,
         decoration: BoxDecoration(
           color: isDark ? _bgDark : _bgLight,
           border: Border(top: BorderSide(color: dividerColor, width: 1)),
@@ -2728,6 +2769,7 @@ class _AyahsPageState extends State<AyahsPage>
               }
             },
             child: GestureDetector(
+              onTap: _toggleFocusMode,
               onScaleStart: (_) {
                 if (!_isPinching) _baseFontScale = _fontScale;
                 _captureZoomAnchor();
@@ -2900,7 +2942,7 @@ class _AyahsPageState extends State<AyahsPage>
                             w = KeyedSubtree(key: _highlightKey!, child: w);
                           }
                           wordWidgets.add(GestureDetector(
-                            onTap: () => _onTapAyah(a.id),
+                            onLongPress: () => _onTapAyah(a.id),
                             child: w,
                           ));
                         }
@@ -3065,7 +3107,8 @@ class _AyahsPageState extends State<AyahsPage>
                                               // No results
                                               if (!_searching &&
                                                   _searchResults.isEmpty &&
-                                                  _searchCtrl.text.length >= 3)
+                                                  _surahHits.isEmpty &&
+                                                  _searchCtrl.text.length >= 2)
                                                 Padding(
                                                   padding: const EdgeInsets
                                                       .symmetric(vertical: 14),
@@ -3076,7 +3119,41 @@ class _AyahsPageState extends State<AyahsPage>
                                                     ),
                                                   ),
                                                 ),
-                                              // Results — maxHeight shrinks with keyboard
+                                              // Surah hits
+                                              if (!_searching && _surahHits.isNotEmpty) ...[
+                                                Divider(color: isDark ? Colors.white12 : Colors.black12, height: 1),
+                                                ...(_surahHits.map((s) => InkWell(
+                                                  onTap: () {
+                                                    _closeSearch();
+                                                    _navigateToSurah(s.suraNo, s.firstAyahId);
+                                                  },
+                                                  child: Padding(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                                                    child: Row(
+                                                      textDirection: TextDirection.rtl,
+                                                      children: [
+                                                        Icon(Icons.menu_book_outlined, size: 18, color: isDark ? _tw54 : _tb45),
+                                                        const SizedBox(width: 8),
+                                                        Text(
+                                                          s.nameAr,
+                                                          textDirection: TextDirection.rtl,
+                                                          style: TextStyle(
+                                                            fontSize: 15,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: isDark ? _tw85 : _tb87,
+                                                          ),
+                                                        ),
+                                                        const Spacer(),
+                                                        Text(
+                                                          'سورة ${s.suraNo}',
+                                                          style: TextStyle(fontSize: 11, color: isDark ? _tw38 : _tb38),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ))),
+                                              ],
+                                              // Ayah results — maxHeight shrinks with keyboard
                                               if (!_searching &&
                                                   _searchResults
                                                       .isNotEmpty) ...[
@@ -3088,11 +3165,6 @@ class _AyahsPageState extends State<AyahsPage>
                                                 ),
                                                 ConstrainedBox(
                                                   constraints: BoxConstraints(
-                                                    // lc.maxHeight = body height minus
-                                                    // keyboard minus overlay padding.
-                                                    // Subtract ~96dp to account for the
-                                                    // search field row (56) + card padding
-                                                    // (16) + divider (1) + breathing room.
                                                     maxHeight:
                                                         (lc.maxHeight - 96)
                                                             .clamp(40.0, 360.0),
