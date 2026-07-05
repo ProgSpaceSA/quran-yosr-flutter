@@ -1271,10 +1271,9 @@ class _AyahsPageState extends State<AyahsPage>
   bool _userDragging = false; // true while finger is actively dragging
   bool _isPinching = false; // true during 2-finger pinch-to-zoom
   int _pointerCount = 0; // live touch-point count (for instant pinch detection)
-  double _zoomAnchorRawPixels =
-      0.0; // scroll pixels at pinch start (for proportional restore)
-  bool _zoomRestorePending =
-      false; // only one postFrameCallback queued at a time
+  GlobalKey? _zoomAnchorKey; // ayah-run key that acts as zoom anchor
+  double _zoomAnchorViewportOffset = 0.0; // anchor item's topOnScreen at pinch start
+  bool _zoomRestorePending = false; // coalesce per-frame restore calls
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
   Timer? _saveDebounce;
@@ -1528,25 +1527,50 @@ class _AyahsPageState extends State<AyahsPage>
   /// (outside ListView's live layout range), giving stale revealOffset values.
   /// Proportional pixel scaling is algebraically equivalent for uniform content
   /// and is always reliable.
+  /// Captures the ayah-run closest to the viewport top as the zoom anchor.
+  /// We prefer runs at or just above the top (negative topOnScreen) over runs
+  /// further below, so we pick the one with topOnScreen nearest to 0 while
+  /// still being within the visible region.
   void _captureZoomAnchor() {
-    if (_scrollController.hasClients) {
-      _zoomAnchorRawPixels = _scrollController.position.pixels;
+    if (!_scrollController.hasClients) return;
+    _zoomAnchorKey = null;
+    final pos = _scrollController.position;
+    final viewH = pos.viewportDimension;
+    GlobalKey? bestKey;
+    double bestDist = double.infinity;
+    for (final key in _runKeyCache.values) {
+      final ctx = key.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      try {
+        final reveal =
+            RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
+        final topOnScreen = reveal - pos.pixels;
+        // Only consider runs that are near or in the viewport.
+        if (topOnScreen < viewH) {
+          final dist = topOnScreen.abs();
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestKey = key;
+            _zoomAnchorViewportOffset = topOnScreen;
+          }
+        }
+      } catch (_) {}
     }
+    _zoomAnchorKey = bestKey;
   }
 
-  /// Restores viewport top content after a scale change by scaling the
-  /// start-pixels proportionally: content height scales linearly with
-  /// _fontScale, so startPixels × (newScale/startScale) gives the correct
-  /// scroll position for the same document top.
+  /// Restores scroll so the anchor run stays at the same viewport offset.
+  /// After the jump, recaptures the anchor so subsequent corrections are
+  /// relative to the actual new view rather than a stale far-away run top.
   void _restoreZoomAnchor() {
-    if (!_isPinching || !_scrollController.hasClients) return;
-    if (_baseFontScale == 0) return;
-    final pos = _scrollController.position;
-    final target = (_zoomAnchorRawPixels * (_fontScale / _baseFontScale))
-        .clamp(0.0, pos.maxScrollExtent);
-    debugPrint('[ZoomRestore] px=${_zoomAnchorRawPixels.toStringAsFixed(0)} '
-        'ratio=${(_fontScale / _baseFontScale).toStringAsFixed(2)} → ${target.toStringAsFixed(0)}');
-    _scrollController.jumpTo(target);
+    final key = _zoomAnchorKey;
+    if (key == null) return;
+    _placeItemAtTop(key, offsetFromTop: _zoomAnchorViewportOffset);
+    // Recapture so next frame anchors to the now-visible content,
+    // not to a run top that may be far off-screen.
+    _captureZoomAnchor();
   }
 
   void _schedulePositionSave() {
@@ -2676,6 +2700,10 @@ class _AyahsPageState extends State<AyahsPage>
               _pointerCount = (_pointerCount - 1).clamp(0, 10);
               if (_pointerCount < 2 && _isPinching) {
                 setState(() => _isPinching = false);
+                // Restore position after layout settles with the new font scale.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _restoreZoomAnchor();
+                });
                 SharedPreferences.getInstance()
                     .then((p) => p.setDouble(_kPrefFontScale, _fontScale));
                 _zoomBadgeTimer?.cancel();
@@ -2688,6 +2716,9 @@ class _AyahsPageState extends State<AyahsPage>
               _pointerCount = (_pointerCount - 1).clamp(0, 10);
               if (_pointerCount < 2 && _isPinching) {
                 setState(() => _isPinching = false);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _restoreZoomAnchor();
+                });
                 SharedPreferences.getInstance()
                     .then((p) => p.setDouble(_kPrefFontScale, _fontScale));
                 _zoomBadgeTimer?.cancel();
@@ -2704,7 +2735,8 @@ class _AyahsPageState extends State<AyahsPage>
               onScaleUpdate: (d) {
                 if (_isPinching) {
                   setState(() {
-                    _fontScale = (_baseFontScale * d.scale).clamp(0.5, 3.0);
+                    final damped = 1.0 + (d.scale - 1.0) * 0.5;
+                    _fontScale = (_baseFontScale * damped).clamp(0.5, 3.0);
                   });
                   if (!_zoomRestorePending) {
                     _zoomRestorePending = true;
