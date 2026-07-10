@@ -14,6 +14,7 @@ import 'independent/search_test.dart' as search;
 import 'independent/nav_test.dart' as nav;
 import 'independent/autoscroll_test.dart' as autoscroll;
 import 'independent/dashboard_test.dart' as dashboard;
+import 'independent/focus_test.dart' as focus;
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -23,11 +24,12 @@ void main() {
   // Resets device state once via setUpAll at group start.
   sequential.main();
 
-  // ── Independent groups (43 tests) ────────────────────────────────────────
+  // ── Independent groups (58 tests) ────────────────────────────────────────
   // Each test resets device state via setUp before running.
   wird.main();
   search.main();
   nav.main();
   autoscroll.main();
   dashboard.main();
+  focus.main();
 }

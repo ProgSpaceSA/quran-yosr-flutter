@@ -20,16 +20,28 @@ void main() {
       expect(find.byKey(const Key('field_search')), findsOneWidget);
     });
 
-    // ── Short query (<3 chars) shows no spinner / no results ──────────────────
-    testWidgets('short_query_no_results', (tester) async {
+    // ── 2-char query: surah hits appear, ayah results list does not ──────────
+    // Surah search fires at ≥ 2 chars; ayah full-text search fires at ≥ 3.
+    testWidgets('short_query_shows_surahs_not_ayahs', (tester) async {
       await launchApp(tester);
       await openSearch(tester);
       await tester.enterText(find.byKey(const Key('field_search')), 'ال');
-      await tester.pump(const Duration(seconds: 2));
-      // Should not have crashed; field still visible
+      await tester.pump(const Duration(seconds: 3));
       expect(find.byKey(const Key('field_search')), findsOneWidget);
-      // Results list should not appear (query too short to trigger search)
+      // Ayah results list must NOT appear.
       expect(find.byKey(const Key('list_search_results')), findsNothing);
+      // Surah hits list DO appear (many surahs match "ال").
+      expect(find.byKey(const Key('list_surah_hits')), findsOneWidget);
+    });
+
+    // ── 1-char query: nothing shown ───────────────────────────────────────────
+    testWidgets('one_char_query_no_results', (tester) async {
+      await launchApp(tester);
+      await openSearch(tester);
+      await tester.enterText(find.byKey(const Key('field_search')), 'ا');
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byKey(const Key('list_search_results')), findsNothing);
+      expect(find.byKey(const Key('list_surah_hits')), findsNothing);
     });
 
     // ── Known query returns results ───────────────────────────────────────────
@@ -95,6 +107,50 @@ void main() {
         expect(page, greaterThan(0));
         expect(page, lessThanOrEqualTo(604));
       }
+    });
+
+    // ── Surah name search returns hits ────────────────────────────────────────
+    testWidgets('surah_name_search_returns_hits', (tester) async {
+      await launchApp(tester);
+      await openSearch(tester);
+      await tester.enterText(
+          find.byKey(const Key('field_search')), 'البقرة');
+      await tester.pump(const Duration(seconds: 3));
+      expect(find.byKey(const Key('list_surah_hits')), findsOneWidget);
+    });
+
+    // ── Surah hit tap closes overlay and navigates ────────────────────────────
+    testWidgets('surah_hit_tap_navigates', (tester) async {
+      await launchApp(tester);
+      await openSearch(tester);
+      await tester.enterText(
+          find.byKey(const Key('field_search')), 'الكهف');
+      await tester.pump(const Duration(seconds: 3));
+      final surahList = find.byKey(const Key('list_surah_hits'));
+      if (surahList.evaluate().isNotEmpty) {
+        final surahRow = find.descendant(
+            of: surahList, matching: find.byType(InkWell));
+        await tester.tap(surahRow.first);
+        await tester.pumpAndSettle(kMedSettle);
+        await tester.pump(kSaveDelay);
+        // Overlay should be dismissed.
+        expect(find.byKey(const Key('field_search')), findsNothing);
+        // Al-Kahf starts at page 293.
+        final page = await savedPage();
+        expect(page, closeTo(293, 20));
+      }
+    });
+
+    // ── Surah name search mixed with ayah results ─────────────────────────────
+    testWidgets('surah_and_ayah_results_coexist', (tester) async {
+      await launchApp(tester);
+      await openSearch(tester);
+      // "الرحمن" matches a surah name AND appears in many ayah texts.
+      await tester.enterText(
+          find.byKey(const Key('field_search')), 'الرحمن');
+      await tester.pump(const Duration(seconds: 4));
+      expect(find.byKey(const Key('list_surah_hits')), findsOneWidget);
+      expect(find.byKey(const Key('list_search_results')), findsOneWidget);
     });
 
     // ── Multiple searches in a row ────────────────────────────────────────────

@@ -107,6 +107,54 @@ void main() {
       expect(finalPage, greaterThanOrEqualTo(midPage));
     });
 
+    // ── Speed-up button starts auto-scroll when not playing ──────────────────
+    testWidgets('speed_up_starts_autoscroll', (tester) async {
+      await launchApp(tester);
+      // Initially paused — play icon is visible.
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      // Tapping speed up must start scrolling.
+      await tester.tap(find.byKey(const Key('btn_speed_up')));
+      await tester.pump(const Duration(milliseconds: 400));
+      // Now playing — pause icon replaces play icon.
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+      // Clean up.
+      await tapAutoScroll(tester);
+      await tester.pumpAndSettle();
+    });
+
+    // ── Speed-down button starts auto-scroll when not playing ────────────────
+    testWidgets('speed_down_starts_autoscroll', (tester) async {
+      await launchApp(tester);
+      // Bump level first so there is room to go down.
+      await tester.tap(find.byKey(const Key('btn_speed_up')));
+      await tester.pump(const Duration(milliseconds: 400));
+      // Now playing after speed-up → stop it.
+      await tapAutoScroll(tester);
+      await tester.pump(kSaveDelay);
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      // Tap speed down — should restart auto-scroll.
+      await tester.tap(find.byKey(const Key('btn_speed_down')));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+      // Clean up.
+      await tapAutoScroll(tester);
+      await tester.pumpAndSettle();
+    });
+
+    // ── Speed clamped at max (10) while playing ───────────────────────────────
+    testWidgets('speed_max_clamped_at_10', (tester) async {
+      await launchApp(tester);
+      final speedFinder = find.byKey(const Key('text_speed_level'));
+      // Tap up 15 times — level must not exceed 10.
+      for (int i = 0; i < 15; i++) {
+        await tester.tap(find.byKey(const Key('btn_speed_up')));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(tester.widget<Text>(speedFinder).data, '10');
+      await tapAutoScroll(tester);
+      await tester.pumpAndSettle();
+    });
+
     // ── Nav bar reappears after stop ──────────────────────────────────────────
     testWidgets('nav_visible_after_stop', (tester) async {
       await launchApp(tester);

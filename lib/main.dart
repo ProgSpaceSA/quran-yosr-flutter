@@ -1475,17 +1475,23 @@ class _AyahsPageState extends State<AyahsPage>
   /// Top offset that scales with zoom so the landed position feels consistent.
   double get _navTopOffset => _kTopInset * _fontScale;
 
-  /// Scans _pageMarkerKeyCache to determine which Mushaf page top is currently
-  /// at the viewport top, then updates _currentSuraName / _currentJuz.
-  /// _PageMarker(N) sits at the N→N+1 page boundary, so when it has scrolled
-  /// above viewport top (topOnScreen ≤ 0) the visible page is N+1.
+  /// Scans page markers and surah headers to determine what is currently at the
+  /// viewport top, then updates _currentSuraName / _currentJuz.
+  ///
+  /// _PageMarker(N) sits at the N→N+1 page boundary; when it has scrolled
+  /// above the viewport top the visible page is N+1.
+  ///
+  /// _SurahHeader(S) sits at the start of surah S; the last header to scroll
+  /// above the viewport top is the current surah — more precise than
+  /// _pageToSuraName when multiple surahs share one Mushaf page.
   void _updateTitleBarFromViewport() {
     if (!_scrollController.hasClients || _ayahs.isEmpty) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     if (nowMs - _lastTitleUpdateMs < 100) return;
     _lastTitleUpdateMs = nowMs;
     final pos = _scrollController.position;
-    // Find marker with the largest topOnScreen ≤ 0 (last one to scroll above top).
+
+    // ── Page detection (for juz) ─────────────────────────────────────────────
     int primPage = 0;
     double primTop = double.negativeInfinity;
     for (final entry in _pageMarkerKeyCache.entries) {
@@ -1503,10 +1509,51 @@ class _AyahsPageState extends State<AyahsPage>
         }
       } catch (_) {}
     }
-    // marker(N) above viewport → page N+1 is at top; no marker → first loaded page.
-    final currentPage = primPage != 0 ? primPage + 1 : _ayahs.first.page;
+    // marker(N) above viewport → page N+1 is at top.
+    // When primPage == 0 (no marker above viewport), keep the last known page
+    // rather than jumping to _ayahs.first.page — that jump is the root cause of
+    // the topbar oscillating back to an early surah when the marker briefly
+    // drops below the viewport threshold due to scroll physics.
+    final int currentPage;
+    if (primPage != 0) {
+      currentPage = primPage + 1;
+    } else {
+      currentPage = _currentPage > 0 ? _currentPage : _ayahs.first.page;
+    }
     _currentPage = currentPage;
-    final suraName = _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
+
+    // ── Surah detection (more granular than page→surah map) ──────────────────
+    int primSurahNo = 0;
+    double primSurahTop = double.negativeInfinity;
+    for (final entry in _surahHeaderKeyCache.entries) {
+      final ctx = entry.value.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      try {
+        final reveal =
+            RenderAbstractViewport.of(box).getOffsetToReveal(box, 0.0).offset;
+        final top = reveal - pos.pixels;
+        if (top <= 0 && top > primSurahTop) {
+          primSurahTop = top;
+          primSurahNo = entry.key;
+        }
+      } catch (_) {}
+    }
+    // Last surah header above viewport = current surah.
+    // Fall back to _currentSuraName (set on navigation) so the topbar is
+    // immediately correct even before the first header scrolls past.
+    final String suraName;
+    if (primSurahNo != 0) {
+      final a = _ayahs.firstWhere((a) => a.suraNo == primSurahNo,
+          orElse: () => _ayahs.first);
+      suraName = a.suraNameAr;
+    } else if (_currentSuraName.isNotEmpty) {
+      suraName = _currentSuraName;
+    } else {
+      suraName = _pageToSuraName[currentPage] ?? _ayahs.first.suraNameAr;
+    }
+
     final juz = _pageToJuz(currentPage);
     if (suraName != _currentSuraName || juz != _currentJuz) {
       setState(() {
@@ -1949,6 +1996,7 @@ class _AyahsPageState extends State<AyahsPage>
       for (final a in ayahs) {
         _pageToSuraName.putIfAbsent(a.page, () => a.suraNameAr);
       }
+      if (!mounted) return;
       setState(() {
         _ayahs.addAll(ayahs);
         _recomputeItems();
@@ -1999,6 +2047,7 @@ class _AyahsPageState extends State<AyahsPage>
       });
     } catch (e) {
       debugPrint('[Init] ERROR: $e');
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _initialLoading = false;
@@ -2391,11 +2440,17 @@ class _AyahsPageState extends State<AyahsPage>
     }
     setState(() => _searching = true);
     final db = await _openDb();
-    final surahRows = await db.rawQuery(
+    // Strip tashkeel so search matches diacritic-laden DB surah names
+    final strippedQuery = query.replaceAll(RegExp(r'[ً-ٰٟ]'), '');
+    final allSurahRows = await db.rawQuery(
       'SELECT sura_no, sura_name_ar, MIN(id) as first_id '
-      'FROM quran_ayahs WHERE sura_name_ar LIKE ? GROUP BY sura_no ORDER BY sura_no',
-      ['%$query%'],
+      'FROM quran_ayahs GROUP BY sura_no ORDER BY sura_no',
     );
+    final surahRows = allSurahRows.where((r) {
+      final name = (r['sura_name_ar'] as String)
+          .replaceAll(RegExp(r'[ً-ٰٟ]'), '');
+      return name.contains(strippedQuery);
+    }).toList();
     List<Map<String, Object?>> ayahRows = [];
     if (query.length >= 3) {
       ayahRows = await db.rawQuery(
@@ -3033,7 +3088,24 @@ class _AyahsPageState extends State<AyahsPage>
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
                         child: LayoutBuilder(
-                            builder: (_, lc) => Column(
+                            builder: (_, lc) {
+                              // Overhead: Material padding(16) + Row(~48) +
+                              // dividers(≤2) + buffer = 120 dp. Keeps the
+                              // Column within lc.maxHeight on small/keyboard-up
+                              // screens (observed h=313 on SM G9880).
+                              const overhead = 120.0;
+                              final budget =
+                                  (lc.maxHeight - overhead).clamp(80.0, 540.0);
+                              final bothLists = !_searching &&
+                                  _surahHits.isNotEmpty &&
+                                  _searchResults.isNotEmpty;
+                              final surahMax = bothLists
+                                  ? (budget * 0.4).clamp(40.0, 120.0)
+                                  : budget.clamp(40.0, 240.0);
+                              final ayahMax = bothLists
+                                  ? (budget - surahMax).clamp(40.0, 360.0)
+                                  : budget.clamp(40.0, 360.0);
+                              return Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     GestureDetector(
@@ -3122,36 +3194,50 @@ class _AyahsPageState extends State<AyahsPage>
                                               // Surah hits
                                               if (!_searching && _surahHits.isNotEmpty) ...[
                                                 Divider(color: isDark ? Colors.white12 : Colors.black12, height: 1),
-                                                ...(_surahHits.map((s) => InkWell(
-                                                  onTap: () {
-                                                    _closeSearch();
-                                                    _navigateToSurah(s.suraNo, s.firstAyahId);
-                                                  },
-                                                  child: Padding(
-                                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-                                                    child: Row(
-                                                      textDirection: TextDirection.rtl,
-                                                      children: [
-                                                        Icon(Icons.menu_book_outlined, size: 18, color: isDark ? _tw54 : _tb45),
-                                                        const SizedBox(width: 8),
-                                                        Text(
-                                                          s.nameAr,
-                                                          textDirection: TextDirection.rtl,
-                                                          style: TextStyle(
-                                                            fontSize: 15,
-                                                            fontWeight: FontWeight.bold,
-                                                            color: isDark ? _tw85 : _tb87,
+                                                ConstrainedBox(
+                                                  constraints: BoxConstraints(
+                                                    maxHeight: surahMax,
+                                                  ),
+                                                  child: ListView.separated(
+                                                    key: const Key('list_surah_hits'),
+                                                    shrinkWrap: true,
+                                                    itemCount: _surahHits.length,
+                                                    separatorBuilder: (_, __) => Divider(height: 1, color: isDark ? Colors.white12 : Colors.black12),
+                                                    itemBuilder: (ctx, i) {
+                                                      final s = _surahHits[i];
+                                                      return InkWell(
+                                                        onTap: () {
+                                                          _closeSearch();
+                                                          _navigateToSurah(s.suraNo, s.firstAyahId);
+                                                        },
+                                                        child: Padding(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                                                          child: Row(
+                                                            textDirection: TextDirection.rtl,
+                                                            children: [
+                                                              Icon(Icons.menu_book_outlined, size: 18, color: isDark ? _tw54 : _tb45),
+                                                              const SizedBox(width: 8),
+                                                              Text(
+                                                                s.nameAr,
+                                                                textDirection: TextDirection.rtl,
+                                                                style: TextStyle(
+                                                                  fontSize: 15,
+                                                                  fontWeight: FontWeight.bold,
+                                                                  color: isDark ? _tw85 : _tb87,
+                                                                ),
+                                                              ),
+                                                              const Spacer(),
+                                                              Text(
+                                                                'سورة ${s.suraNo}',
+                                                                style: TextStyle(fontSize: 11, color: isDark ? _tw38 : _tb38),
+                                                              ),
+                                                            ],
                                                           ),
                                                         ),
-                                                        const Spacer(),
-                                                        Text(
-                                                          'سورة ${s.suraNo}',
-                                                          style: TextStyle(fontSize: 11, color: isDark ? _tw38 : _tb38),
-                                                        ),
-                                                      ],
-                                                    ),
+                                                      );
+                                                    },
                                                   ),
-                                                ))),
+                                                ),
                                               ],
                                               // Ayah results — maxHeight shrinks with keyboard
                                               if (!_searching &&
@@ -3165,9 +3251,7 @@ class _AyahsPageState extends State<AyahsPage>
                                                 ),
                                                 ConstrainedBox(
                                                   constraints: BoxConstraints(
-                                                    maxHeight:
-                                                        (lc.maxHeight - 96)
-                                                            .clamp(40.0, 360.0),
+                                                    maxHeight: ayahMax,
                                                   ),
                                                   child: ListView.separated(
                                                     key: const Key('list_search_results'),
@@ -3272,7 +3356,8 @@ class _AyahsPageState extends State<AyahsPage>
                                       ),
                                     ),
                                   ],
-                                )),
+                                );
+                            }),
                       ),
                     ),
                   ),
@@ -3601,6 +3686,8 @@ class _NavSheetState extends State<_NavSheet> {
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: GestureDetector(
+                    key: i == 0 ? const Key('tab_page') : null,
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       if (_mode == 0 && i != 0) _pageFocus.unfocus();
                       setState(() => _mode = i);
