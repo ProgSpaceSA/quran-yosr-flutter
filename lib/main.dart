@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'dart:io';
 import 'dart:convert';
@@ -1290,8 +1291,10 @@ class _AyahsPageState extends State<AyahsPage>
   bool _showZoomBadge = false; // true while pinching + 1.5 s after release
   Timer? _zoomBadgeTimer;
   Timer? _saveDebounce;
-  bool _showTutorial = false; // true on first launch
-  int _speedLevel = 0; // 0 = slowest … 9 = fastest
+  OverlayEntry? _tutorialEntry;
+  bool _tutorialPending = false;
+  final GlobalKey _playBtnTutorialKey = GlobalKey();
+  int _speedLevel = 2; // 0 = slowest … 9 = fastest
   Ticker? _autoScrollTicker;
   Duration _lastTickElapsed = Duration.zero;
   // px per millisecond for each of the 10 speed levels (geometric, max unchanged)
@@ -1719,6 +1722,10 @@ class _AyahsPageState extends State<AyahsPage>
     super.didUpdateWidget(old);
     if (widget.isActiveTab && !old.isActiveTab) {
       _startSession();
+      if (_tutorialPending) {
+        _tutorialPending = false;
+        _showTutorialStep(1);
+      }
     } else if (!widget.isActiveTab && old.isActiveTab) {
       _endSession();
     }
@@ -1784,6 +1791,8 @@ class _AyahsPageState extends State<AyahsPage>
     WidgetsBinding.instance.removeObserver(this);
     debugPrint('[Dispose] dispose — saving lastKnownSaveId=$_lastKnownSaveId');
     WakelockPlus.disable();
+    _tutorialEntry?.remove();
+    _tutorialEntry = null;
     _saveDebounce?.cancel();
     _zoomBadgeTimer?.cancel();
     _autoScrollTicker?.dispose();
@@ -2420,11 +2429,34 @@ class _AyahsPageState extends State<AyahsPage>
   Future<void> _checkTutorial() async {
     final prefs = await SharedPreferences.getInstance();
     final seen = prefs.getBool('tutorial_shown') ?? false;
-    if (!seen && mounted) setState(() => _showTutorial = true);
+    if (!seen && mounted) {
+      if (widget.isActiveTab) {
+        _showTutorialStep(1);
+      } else {
+        _tutorialPending = true;
+      }
+    }
   }
 
-  void _dismissTutorial() {
-    setState(() => _showTutorial = false);
+  void _showTutorialStep(int step) {
+    _tutorialEntry?.remove();
+    final entry = OverlayEntry(
+      builder: (_) => step == 1
+          ? _TutorialStep1Overlay(
+              playBtnKey: _playBtnTutorialKey,
+              onNext: () => _showTutorialStep(2),
+            )
+          : _TutorialStep2Overlay(onDone: _closeTutorial),
+    );
+    _tutorialEntry = entry;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Overlay.of(this.context).insert(entry);
+    });
+  }
+
+  void _closeTutorial() {
+    _tutorialEntry?.remove();
+    _tutorialEntry = null;
     SharedPreferences.getInstance()
         .then((p) => p.setBool('tutorial_shown', true));
   }
@@ -2724,14 +2756,17 @@ class _AyahsPageState extends State<AyahsPage>
               children: [
                 const SizedBox(width: 4),
                 // Play / Pause
-                _barBtn(
-                  key: const Key('btn_autoscroll'),
-                  icon: _autoScrolling
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                  tooltip: _autoScrolling ? 'إيقاف' : 'تشغيل',
-                  onPressed: _toggleAutoScroll,
-                  isDark: isDark,
+                KeyedSubtree(
+                  key: _playBtnTutorialKey,
+                  child: _barBtn(
+                    key: const Key('btn_autoscroll'),
+                    icon: _autoScrolling
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    tooltip: _autoScrolling ? 'إيقاف' : 'تشغيل',
+                    onPressed: _toggleAutoScroll,
+                    isDark: isDark,
+                  ),
                 ),
                 const SizedBox(width: 4),
                 VerticalDivider(
@@ -3364,130 +3399,305 @@ class _AyahsPageState extends State<AyahsPage>
                 ),
               ),
             ),
-          // ── First-launch tutorial overlay ───────────────────────────
-          if (_showTutorial)
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: _dismissTutorial,
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.93),
-                  child: SafeArea(
-                    child: Center(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 28, vertical: 24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'مرحباً بك في القرآن الكريم يُسر',
-                              textAlign: TextAlign.center,
-                              textDirection: TextDirection.rtl,
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-                            // ── Card 1: Auto-scroll ──────────────────
-                            _TutorialCard(
-                              icon: Icons.play_circle_outline,
-                              title: 'التحريك التلقائي',
-                              body:
-                                  'اضغط على زر ▶ في الشريط السفلي لبدء التحريك التلقائي.\n'
-                                  'استخدم − و + للتحكم بالسرعة.',
-                            ),
-                            const SizedBox(height: 16),
-                            // ── Card 2: Zoom ─────────────────────────
-                            _TutorialCard(
-                              icon: Icons.pinch_outlined,
-                              title: 'تكبير الخط وتصغيره',
-                              body:
-                                  'ضع إصبعين على الشاشة وقرّب بينهما أو باعد لتغيير حجم الخط.',
-                            ),
-                            const SizedBox(height: 28),
-                            GestureDetector(
-                              onTap: _dismissTutorial,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 40, vertical: 14),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFc9a84c),
-                                  borderRadius: BorderRadius.circular(30),
-                                ),
-                                child: const Text(
-                                  'حسناً',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
     );
   }
 }
 
-// ── Tutorial card helper ───────────────────────────────────────────────────
+// ── Tutorial overlays ─────────────────────────────────────────────────────
 
-class _TutorialCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String body;
-  const _TutorialCard(
-      {required this.icon, required this.title, required this.body});
+class _TutorialStep1Overlay extends StatelessWidget {
+  final GlobalKey playBtnKey;
+  final VoidCallback onNext;
+  const _TutorialStep1Overlay(
+      {required this.playBtnKey, required this.onNext});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(18),
-        border:
-            Border.all(color: Colors.white.withValues(alpha: 0.18), width: 1),
-      ),
-      child: Column(
+    final size = MediaQuery.of(context).size;
+
+    Offset center = Offset(28, size.height - 80);
+    double radius = 36.0;
+    final btnCtx = playBtnKey.currentContext;
+    if (btnCtx != null) {
+      final box = btnCtx.findRenderObject() as RenderBox?;
+      if (box != null) {
+        center = box.localToGlobal(box.size.center(Offset.zero));
+        radius = box.size.longestSide / 2 + 24;
+      }
+    }
+
+    // Text sits 120px above the spotlight top
+    final textTopY = center.dy - radius - 150;
+    // Arrow goes from just below the text (centered) to just above the spotlight
+    final arrowFrom = Offset(size.width / 2, textTopY + 44);
+    final arrowTo = Offset(center.dx, center.dy - radius - 6);
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
         children: [
-          Icon(icon, color: const Color(0xFFc9a84c), size: 40),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            textDirection: TextDirection.rtl,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
+          // Full-screen dark overlay with spotlight hole — absorbs taps
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: () {},
+              child: CustomPaint(
+                painter: _SpotlightPainter(center: center, radius: radius),
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          Text(
-            body,
-            textDirection: TextDirection.rtl,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 14,
-              color: _tw85,
-              height: 1.7,
+          // Label
+          Positioned(
+            top: textTopY,
+            left: 0,
+            right: 0,
+            child: const Center(
+              child: Text(
+                'جرب النزول الذاتي',
+                textDirection: TextDirection.rtl,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ),
+          ),
+          // Curved arrow tilted toward the button
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _CurvedArrowPainter(from: arrowFrom, to: arrowTo),
+            ),
+          ),
+          // حسنا button at the bottom
+          Positioned(
+            bottom: 48,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: GestureDetector(
+                onTap: onNext,
+                child: const _TutorialOkBtn(),
+              ),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+class _TutorialStep2Overlay extends StatelessWidget {
+  final VoidCallback onDone;
+  const _TutorialStep2Overlay({required this.onDone});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      child: GestureDetector(
+        onTap: () {},
+        child: Container(
+          color: const Color(0xE6000000),
+          child: SafeArea(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  'قرّب وباعد بين إصبعين\nلتغيير حجم الخط',
+                  textAlign: TextAlign.center,
+                  textDirection: TextDirection.rtl,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+                const SizedBox(height: 56),
+                const _PinchAnimWidget(),
+                const SizedBox(height: 72),
+                GestureDetector(
+                  onTap: onDone,
+                  child: const _TutorialOkBtn(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TutorialOkBtn extends StatelessWidget {
+  const _TutorialOkBtn();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFc9a84c),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: const Text(
+        'حسناً',
+        style: TextStyle(
+          fontSize: 17,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+          decoration: TextDecoration.none,
+        ),
+      ),
+    );
+  }
+}
+
+class _CurvedArrowPainter extends CustomPainter {
+  final Offset from;
+  final Offset to;
+  const _CurvedArrowPainter({required this.from, required this.to});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const color = Color(0xFFc9a84c);
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    // Control point pulled toward the button side so the curve tilts that way
+    final ctrl = Offset(
+      from.dx + (to.dx - from.dx) * 0.25,
+      from.dy + (to.dy - from.dy) * 0.65,
+    );
+
+    canvas.drawPath(
+      Path()
+        ..moveTo(from.dx, from.dy)
+        ..quadraticBezierTo(ctrl.dx, ctrl.dy, to.dx, to.dy),
+      paint,
+    );
+
+    // Arrowhead: tangent direction at end = (to - ctrl) normalised
+    final angle = math.atan2(to.dy - ctrl.dy, to.dx - ctrl.dx);
+    const headLen = 14.0;
+    const headAngle = 0.45;
+    canvas.drawLine(
+      to,
+      Offset(to.dx - headLen * math.cos(angle - headAngle),
+          to.dy - headLen * math.sin(angle - headAngle)),
+      paint,
+    );
+    canvas.drawLine(
+      to,
+      Offset(to.dx - headLen * math.cos(angle + headAngle),
+          to.dy - headLen * math.sin(angle + headAngle)),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CurvedArrowPainter old) =>
+      old.from != from || old.to != to;
+}
+
+class _SpotlightPainter extends CustomPainter {
+  final Offset center;
+  final double radius;
+  const _SpotlightPainter({required this.center, required this.radius});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.saveLayer(Rect.largest, Paint());
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xE6000000),
+    );
+    canvas.drawCircle(center, radius, Paint()..blendMode = BlendMode.clear);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_SpotlightPainter old) =>
+      old.center != center || old.radius != radius;
+}
+
+class _PinchAnimWidget extends StatefulWidget {
+  const _PinchAnimWidget();
+
+  @override
+  State<_PinchAnimWidget> createState() => _PinchAnimWidgetState();
+}
+
+class _PinchAnimWidgetState extends State<_PinchAnimWidget>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) {
+        // True 45° diagonal: fingers move along bottom-left ↔ top-right axis
+        final d = (10.0 + _anim.value * 54.0) * 0.707;
+        return SizedBox(
+          width: 180,
+          height: 180,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Transform.translate(
+                offset: Offset(-d, d), // bottom-left
+                child: _fingertip(),
+              ),
+              Transform.translate(
+                offset: Offset(d, -d), // top-right
+                child: _fingertip(),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _fingertip() => Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.85),
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.white.withValues(alpha: 0.35),
+              blurRadius: 16,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+      );
 }
 
 // ── Navigation bottom sheet ────────────────────────────────────────────────
